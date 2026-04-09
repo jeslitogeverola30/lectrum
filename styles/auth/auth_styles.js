@@ -58,29 +58,22 @@ const styles = StyleSheet.create({
     borderColor: Colors.gold,
     opacity: 0.3,
   },
-  signupCard: {
+  loginCard: {
     backgroundColor: Colors.white,
     borderRadius: 35,
     paddingHorizontal: 24,
     paddingTop: 32,
     paddingBottom: 24,
     marginHorizontal: -16,
-    marginTop: -124,
+    marginTop: 45,
     zIndex: 10,
     flex: 1,
   },
-  signupTitle: {
+  loginTitle: {
     fontSize: 32,
     fontWeight: '800',
     color: Colors.gold,
     textAlign: 'center',
-    marginBottom: 6,
-  },
-  signupSubtitle: {
-    fontSize: 14,
-    color: Colors.darkGray,
-    textAlign: 'center',
-    fontWeight: '500',
     marginBottom: 12,
   },
   signUpContainer: {
@@ -116,19 +109,15 @@ const styles = StyleSheet.create({
     color: Colors.textDark,
     fontWeight: '500',
   },
-  passwordToggle: {
-    paddingLeft: 10,
-    paddingVertical: 6,
-  },
   checkboxContainer: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 24,
   },
   rememberMeContainer: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    flex: 1,
+    alignItems: 'center',
   },
   checkbox: {
     width: 20,
@@ -152,13 +141,16 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
   },
   rememberMeText: {
-    flex: 1,
     fontSize: 14,
     color: Colors.darkGray,
     fontWeight: '500',
-    lineHeight: 20,
   },
-  signupButton: {
+  forgotPasswordText: {
+    fontSize: 14,
+    color: Colors.textDark,
+    fontWeight: '700',
+  },
+  loginButton: {
     backgroundColor: Colors.accent,
     paddingVertical: 16,
     borderRadius: 28,
@@ -166,7 +158,7 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     elevation: 5,
   },
-  signupButtonText: {
+  loginButtonText: {
     fontSize: 16,
     fontWeight: '700',
     color: Colors.white,
@@ -227,6 +219,62 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: Colors.textDark,
   },
+
+  // Sign Up Styles
+  signupCard: {
+      backgroundColor: Colors.white,
+      borderRadius: 35,
+      paddingHorizontal: 24,
+      paddingTop: 32,
+      paddingBottom: 24,
+      marginHorizontal: -16,
+      marginTop: -124,
+      zIndex: 10,
+      flex: 1,
+    },
+    signupTitle: {
+      fontSize: 32,
+      fontWeight: '800',
+      color: Colors.gold,
+      textAlign: 'center',
+      marginBottom: 6,
+    },
+    signupSubtitle: {
+      fontSize: 14,
+      color: Colors.darkGray,
+      textAlign: 'center',
+      fontWeight: '500',
+      marginBottom: 12,
+    },
+    signUpContainer: {
+      flexDirection: 'row',
+      justifyContent: 'center',
+      marginBottom: 28,
+    },
+    signUpText: {
+      fontSize: 14,
+      color: Colors.darkGray,
+      fontWeight: '500',
+    },
+    signUpLink: {
+      fontSize: 14,
+      color: Colors.primary,
+      fontWeight: '700',
+    },
+    signupButton: {
+        backgroundColor: Colors.accent,
+        paddingVertical: 16,
+        borderRadius: 28,
+        alignItems: 'center',
+        marginBottom: 24,
+        elevation: 5,
+      },
+      signupButtonText: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: Colors.white,
+      },
+
 });
 
 export default styles;

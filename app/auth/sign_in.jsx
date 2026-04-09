@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import styles, { Colors } from '../../styles/auth/sign_in_styles.js';
+import styles, { Colors } from '../../styles/auth/auth_styles.js';
 
 const { height } = Dimensions.get('window');
 
