@@ -1,75 +1,164 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuth } from '@clerk/expo';
+import { useAuth, useUser } from '@clerk/expo';
 import { Redirect, useRouter } from 'expo-router';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View, Modal, FlatList } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { supabase } from '../../services/supabase.js';
 import { Colors } from '../../styles/auth/auth_styles.js';
 
-const MY_ROOMS = [
-  {
-    id: 'room-1',
-    name: 'Biology Study Group',
-    topic: 'Biology 101',
-    members: 3,
-    lastMessage: 'Great session today!',
-    timestamp: '2 min ago',
-    avatar: '🧬',
-  },
-  {
-    id: 'room-2',
-    name: 'History Buffs',
-    topic: 'Ancient History',
-    members: 5,
-    lastMessage: 'What about the Silk Road?',
-    timestamp: '1 hour ago',
-    avatar: '🏛️',
-  },
-  {
-    id: 'room-3',
-    name: 'Code Masters',
-    topic: 'Computer Science',
-    members: 2,
-    lastMessage: 'That algorithm is clever',
-    timestamp: 'Yesterday',
-    avatar: '💻',
-  },
-  {
-    id: 'room-4',
-    name: 'Capital Challenge',
-    topic: 'World Capitals',
-    members: 4,
-    lastMessage: 'You: Looking for more players',
-    timestamp: '3 days ago',
-    avatar: '🌍',
-  },
-];
+const formatRelativeTime = (value) => {
+  if (!value) {
+    return 'Just now';
+  }
+
+  const parsedDate = new Date(value);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return 'Just now';
+  }
+
+  const diffMinutes = Math.floor((Date.now() - parsedDate.getTime()) / 60000);
+
+  if (diffMinutes < 1) {
+    return 'Just now';
+  }
+
+  if (diffMinutes < 60) {
+    return `${diffMinutes} min ago`;
+  }
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) {
+    return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
+  }
+
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 7) {
+    return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
+  }
+
+  return parsedDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+};
 
 
 
 export default function RoomsTabScreen() {
   const { isLoaded, isSignedIn } = useAuth();
+  const { user } = useUser();
   const router = useRouter();
   const [showActionMenu, setShowActionMenu] = useState(false);
   const [roomCode, setRoomCode] = useState('');
+  const [roomName, setRoomName] = useState('');
+  const [roomTopic, setRoomTopic] = useState('');
+  const [inviteEmails, setInviteEmails] = useState('');
+  const [rooms, setRooms] = useState([]);
+  const [loadingRooms, setLoadingRooms] = useState(true);
+  const [roomsError, setRoomsError] = useState('');
+  const [savingRoom, setSavingRoom] = useState(false);
 
-  const handleJoinRoom = () => {
-    const sanitizedCode = roomCode.replace(/\D/g, '');
+  const currentUserId = user?.id;
+  const currentUserEmail = user?.primaryEmailAddress?.emailAddress || '';
+  const currentUsername = user?.username || user?.fullName || currentUserEmail.split('@')[0] || 'Member';
 
-    if (sanitizedCode.length !== 5) {
-      Alert.alert('Invalid room code', 'Enter the 5-digit code your friend sent you.');
+  const ensureProfileRecord = async () => {
+    if (!currentUserId) {
       return;
     }
 
-    Alert.alert('Joining room', `Looking for lobby ${sanitizedCode}.`);
-    setRoomCode('');
-    setShowActionMenu(false);
+    const { error } = await supabase.from('profiles').upsert(
+      {
+        id: currentUserId,
+        email: currentUserEmail || null,
+        username: currentUsername,
+        avatar_emoji: '👤',
+      },
+      { onConflict: 'id' }
+    );
+
+    if (error) {
+      throw error;
+    }
   };
 
-  const handleCreateRoom = () => {
-    setShowActionMenu(false);
-    Alert.alert('Room Created', 'Your private battle is ready!');
-  };
+  useEffect(() => {
+    let isActive = true;
+
+    const loadRooms = async () => {
+      if (!currentUserId) {
+        return;
+      }
+
+      setLoadingRooms(true);
+      setRoomsError('');
+
+      try {
+        await ensureProfileRecord();
+      } catch (error) {
+        if (isActive) {
+          setRoomsError(error?.message || 'Failed to sync your profile.');
+        }
+        return;
+      }
+
+      const { data: memberRows, error: membersQueryError } = await supabase
+        .from('room_members')
+        .select('id, room_id, joined_at, role, room:rooms(id, name, topic, avatar_emoji, created_at, creator_id)')
+        .eq('user_id', currentUserId)
+        .order('joined_at', { ascending: false });
+
+      if (membersQueryError) {
+        if (isActive) {
+          setRooms([]);
+          setRoomsError(membersQueryError.message);
+        }
+        return;
+      }
+
+      const roomsWithActivity = await Promise.all(
+        (memberRows ?? []).map(async (memberRow) => {
+          const room = memberRow.room;
+
+          if (!room) {
+            return null;
+          }
+
+          const [{ count: memberCount }, { data: latestMessages }] = await Promise.all([
+            supabase.from('room_members').select('id', { count: 'exact', head: true }).eq('room_id', room.id),
+            supabase
+              .from('messages')
+              .select('text, created_at')
+              .eq('room_id', room.id)
+              .order('created_at', { ascending: false })
+              .limit(1),
+          ]);
+
+          const latestMessage = latestMessages?.[0];
+
+          return {
+            ...room,
+            avatar: room.avatar_emoji || '🎓',
+            members: memberCount ?? 0,
+            lastMessage: latestMessage?.text || 'No messages yet',
+            timestamp: formatRelativeTime(latestMessage?.created_at || room.created_at),
+          };
+        })
+      );
+
+      if (isActive) {
+        setRooms(roomsWithActivity.filter(Boolean));
+      }
+    };
+
+    loadRooms().finally(() => {
+      if (isActive) {
+        setLoadingRooms(false);
+      }
+    });
+
+    return () => {
+      isActive = false;
+    };
+  }, [currentUserEmail, currentUserId, currentUsername]);
 
 
   if (!isLoaded) {
@@ -80,7 +169,13 @@ export default function RoomsTabScreen() {
     return <Redirect href="/auth/sign_in" />;
   }
 
-  const emptyState = MY_ROOMS.length === 0;
+  const emptyState = !loadingRooms && rooms.length === 0;
+
+  const parseInviteEmails = () =>
+    inviteEmails
+      .split(/[\n,;]/)
+      .map((email) => email.trim())
+      .filter(Boolean);
 
   const handleOpenRoom = (room) => {
     router.push({
@@ -117,6 +212,122 @@ export default function RoomsTabScreen() {
     </Pressable>
   );
 
+  const handleCreateRoom = async () => {
+    const trimmedRoomName = roomName.trim();
+    const trimmedRoomTopic = roomTopic.trim();
+    const inviteEmailList = parseInviteEmails();
+
+    if (!trimmedRoomName) {
+      Alert.alert('Missing room name', 'Enter a name for the room.');
+      return;
+    }
+
+    if (inviteEmailList.length < 1) {
+      Alert.alert('Missing invitee', 'Add at least 1 user by email.');
+      return;
+    }
+
+    if (!currentUserId) {
+      Alert.alert('Missing user', 'Please wait for your account to finish loading.');
+      return;
+    }
+
+    setSavingRoom(true);
+
+    try {
+      await ensureProfileRecord();
+
+      const { data, error } = await supabase.rpc('create_room_with_invites', {
+        p_creator_id: currentUserId,
+        p_creator_email: currentUserEmail || null,
+        p_room_name: trimmedRoomName,
+        p_room_topic: trimmedRoomTopic || 'Study Room',
+        p_invite_emails: inviteEmailList,
+        p_avatar_emoji: '🎓',
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      const createdRoom = Array.isArray(data) ? data[0] : data;
+
+      setShowActionMenu(false);
+      setRoomName('');
+      setRoomTopic('');
+      setInviteEmails('');
+
+      if (createdRoom?.id) {
+        router.push({
+          pathname: '/room/[id]',
+          params: {
+            id: createdRoom.id,
+            name: createdRoom.name,
+            topic: createdRoom.topic,
+            avatar: createdRoom.avatar_emoji || '🎓',
+          },
+        });
+        return;
+      }
+
+      Alert.alert('Room created', 'Your room was created successfully.');
+    } catch (error) {
+      Alert.alert('Room creation failed', error?.message || 'Unable to create room right now.');
+    } finally {
+      setSavingRoom(false);
+    }
+  };
+
+  const handleJoinRoom = async () => {
+    const sanitizedCode = roomCode.replace(/\D/g, '');
+
+    if (sanitizedCode.length !== 5) {
+      Alert.alert('Invalid room code', 'Enter the 5-digit code your friend sent you.');
+      return;
+    }
+
+    if (!currentUserId) {
+      Alert.alert('Missing user', 'Please wait for your account to finish loading.');
+      return;
+    }
+
+    try {
+      await ensureProfileRecord();
+
+      const { data, error } = await supabase.rpc('join_room_by_code', {
+        p_user_id: currentUserId,
+        p_user_email: currentUserEmail || null,
+        p_room_code: sanitizedCode,
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      const joinedRoom = Array.isArray(data) ? data[0] : data;
+
+      setRoomCode('');
+      setShowActionMenu(false);
+
+      if (joinedRoom?.id) {
+        router.push({
+          pathname: '/room/[id]',
+          params: {
+            id: joinedRoom.id,
+            name: joinedRoom.name,
+            topic: joinedRoom.topic,
+            avatar: joinedRoom.avatar_emoji || '🎓',
+          },
+        });
+        return;
+      }
+
+      Alert.alert('Joined room', 'You have been added to the room.');
+    } catch (error) {
+      Alert.alert('Joining room failed', error?.message || 'Unable to join room right now.');
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <View style={styles.header}>
@@ -133,13 +344,25 @@ export default function RoomsTabScreen() {
         </ScrollView>
       ) : (
         <FlatList
-          data={MY_ROOMS}
+          data={rooms}
           renderItem={renderRoomItem}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           scrollEnabled={true}
         />
       )}
+
+      {loadingRooms ? (
+        <View style={styles.loadingOverlay} pointerEvents="none">
+          <Text style={styles.loadingText}>Loading rooms from Supabase...</Text>
+        </View>
+      ) : null}
+
+      {roomsError ? (
+        <View style={styles.errorBanner} pointerEvents="none">
+          <Text style={styles.errorBannerText}>{roomsError}</Text>
+        </View>
+      ) : null}
 
       {/* Floating Action Button */}
       <Pressable
@@ -188,12 +411,50 @@ export default function RoomsTabScreen() {
 
             {/* Host Room */}
             <View style={styles.actionSection}>
+              <View style={styles.actionSectionHeader}>
+                <Ionicons name="people-outline" size={18} color={Colors.accent} />
+                <Text style={styles.actionSectionTitle}>Create Room</Text>
+              </View>
+
+              <TextInput
+                value={roomName}
+                onChangeText={setRoomName}
+                placeholder="Name of Room"
+                placeholderTextColor={Colors.darkGray}
+                style={styles.roomInput}
+              />
+
+              <TextInput
+                value={roomTopic}
+                onChangeText={setRoomTopic}
+                placeholder="Topic (optional)"
+                placeholderTextColor={Colors.darkGray}
+                style={styles.roomInput}
+              />
+
+              <TextInput
+                value={inviteEmails}
+                onChangeText={setInviteEmails}
+                placeholder="Add at least 1 user by email"
+                placeholderTextColor={Colors.darkGray}
+                style={[styles.roomInput, styles.roomInputMultiline]}
+                multiline
+                numberOfLines={3}
+                autoCapitalize="none"
+                keyboardType="email-address"
+              />
+
               <Pressable
                 onPress={handleCreateRoom}
-                style={({ pressed }) => [styles.hostButton, pressed && styles.hostButtonPressed]}
+                disabled={savingRoom}
+                style={({ pressed }) => [
+                  styles.hostButton,
+                  pressed && styles.hostButtonPressed,
+                  savingRoom && styles.hostButtonDisabled,
+                ]}
               >
                 <Ionicons name="add-circle-outline" size={20} color={Colors.white} />
-                <Text style={styles.hostButtonText}>Create Private Battle</Text>
+                <Text style={styles.hostButtonText}>{savingRoom ? 'Creating Room...' : 'Create Room'}</Text>
               </Pressable>
             </View>
 
@@ -337,6 +598,47 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     maxWidth: 280,
   },
+  loadingOverlay: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 108,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.96)',
+    borderWidth: 1,
+    borderColor: 'rgba(26,26,26,0.06)',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+  },
+  loadingText: {
+    color: Colors.textDark,
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  errorBanner: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 108,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: '#FFF3F3',
+    borderWidth: 1,
+    borderColor: '#F4C7C7',
+  },
+  errorBannerText: {
+    color: '#A33',
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
   fab: {
     position: 'absolute',
     bottom: 28,
@@ -402,6 +704,22 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: 1.5,
   },
+  roomInput: {
+    minHeight: 50,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(26,26,26,0.08)',
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    color: Colors.textDark,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  roomInputMultiline: {
+    minHeight: 78,
+    textAlignVertical: 'top',
+  },
   actionButton: {
     width: 50,
     height: 50,
@@ -426,6 +744,9 @@ const styles = StyleSheet.create({
   hostButtonPressed: {
     opacity: 0.85,
     transform: [{ scale: 0.98 }],
+  },
+  hostButtonDisabled: {
+    opacity: 0.7,
   },
   hostButtonText: {
     color: Colors.white,
