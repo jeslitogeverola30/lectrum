@@ -164,6 +164,19 @@ export default function RoomChatScreen() {
     setShowWaitingRoom(true);
   };
 
+  const handleEnterBattleArena = () => {
+    setShowWaitingRoom(false);
+    router.push({
+      pathname: '/battle/[id]',
+      params: {
+        id: roomId || 'room',
+        roomName: roomName || 'Study Room',
+        roomTopic: roomTopic || 'General Knowledge',
+        rounds: String(selectedItemCount),
+      },
+    });
+  };
+
   const handleRemoveMember = (member) => {
     if (!isCreator || member.name === defaultConversation.creatorName) {
       return;
@@ -458,12 +471,39 @@ export default function RoomChatScreen() {
             </View>
             <Text style={styles.waitingTitle}>Waiting for Members</Text>
             <Text style={styles.waitingSubtitle}>
-              Battle configured with {selectedItemCount} items from {selectedFileName || 'your file'}. Waiting for others to join.
+              Battle configured with {selectedItemCount} items from {selectedFileName || 'your file'}.
+              {isCreator ? ' Start when everyone is ready.' : ' Waiting for the creator to start the battle.'}
             </Text>
 
             <View style={styles.waitingMetaRow}>
               <Text style={styles.waitingMetaText}>Room: {roomName || 'Study Room'}</Text>
               <Text style={styles.waitingMetaText}>Items: {selectedItemCount}</Text>
+            </View>
+
+            <View style={styles.lobbyMembersCard}>
+              <Text style={styles.lobbyMembersTitle}>Lobby Members</Text>
+              {roomMembers.map((member) => {
+                const isMemberCreator = member.name === defaultConversation.creatorName;
+                const initial = member.name.slice(0, 1).toUpperCase();
+
+                return (
+                  <View key={`waiting-${member.id}`} style={styles.lobbyMemberRow}>
+                    <View style={styles.lobbyMemberLeft}>
+                      <View style={styles.lobbyMemberAvatar}>
+                        <Text style={styles.lobbyMemberAvatarText}>{initial}</Text>
+                      </View>
+                      <View>
+                        <Text style={styles.lobbyMemberName}>{member.name}</Text>
+                        <Text style={styles.lobbyMemberRole}>{isMemberCreator ? 'Creator' : 'Member'}</Text>
+                      </View>
+                    </View>
+
+                    <View style={[styles.lobbyStatusPill, isMemberCreator && styles.lobbyStatusCreator]}>
+                      <Text style={styles.lobbyStatusText}>{isMemberCreator ? 'Can Start' : 'In Lobby'}</Text>
+                    </View>
+                  </View>
+                );
+              })}
             </View>
 
             <Pressable
@@ -472,6 +512,21 @@ export default function RoomChatScreen() {
             >
               <Text style={styles.closeWaitingText}>Close</Text>
             </Pressable>
+
+            {isCreator ? (
+              <Pressable
+                onPress={handleEnterBattleArena}
+                style={({ pressed }) => [styles.enterArenaButton, pressed && styles.enterArenaButtonPressed]}
+              >
+                <Ionicons name="game-controller-outline" size={18} color={Colors.white} />
+                <Text style={styles.enterArenaText}>Start Battle</Text>
+              </Pressable>
+            ) : (
+              <View style={styles.waitingCreatorNotice}>
+                <Ionicons name="time-outline" size={16} color={Colors.darkGray} />
+                <Text style={styles.waitingCreatorNoticeText}>Waiting for the creator to start the battle...</Text>
+              </View>
+            )}
           </View>
         </Pressable>
       </Modal>
@@ -983,6 +1038,70 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
+  lobbyMembersCard: {
+    width: '100%',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(26,26,26,0.05)',
+    backgroundColor: '#FAFBFD',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  lobbyMembersTitle: {
+    color: Colors.textDark,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  lobbyMemberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  lobbyMemberLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+  },
+  lobbyMemberAvatar: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF3EF',
+  },
+  lobbyMemberAvatarText: {
+    color: Colors.textDark,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  lobbyMemberName: {
+    color: Colors.textDark,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  lobbyMemberRole: {
+    color: Colors.darkGray,
+    fontSize: 11,
+    marginTop: 1,
+  },
+  lobbyStatusPill: {
+    borderRadius: 999,
+    backgroundColor: '#EEF6FF',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  lobbyStatusCreator: {
+    backgroundColor: '#FFF3EF',
+  },
+  lobbyStatusText: {
+    color: Colors.textDark,
+    fontSize: 11,
+    fontWeight: '600',
+  },
   closeWaitingButton: {
     marginTop: 2,
     width: '100%',
@@ -1001,5 +1120,40 @@ const styles = StyleSheet.create({
     color: Colors.textDark,
     fontSize: 14,
     fontWeight: '700',
+  },
+  enterArenaButton: {
+    width: '100%',
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: Colors.textDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  enterArenaButtonPressed: {
+    opacity: 0.85,
+  },
+  enterArenaText: {
+    color: Colors.white,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  waitingCreatorNotice: {
+    width: '100%',
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(26,26,26,0.08)',
+    backgroundColor: '#F8FAFC',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  waitingCreatorNoticeText: {
+    color: Colors.darkGray,
+    fontSize: 12,
+    fontWeight: '600',
   },
 });
