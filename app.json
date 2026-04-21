@@ -2,11 +2,11 @@
   "expo": {
     "name": "Lectrum",
     "slug": "lectrum",
+    "scheme": "lectrum",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/logo/lectrum_logo.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
     "splash": {
       "image": "./assets/logo/lectrum_logo_noBG.png",
       "resizeMode": "contain",
@@ -19,11 +19,13 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/logo/lectrum_logo_noBG.png",
         "backgroundColor": "#f07167"
-      },
-      "edgeToEdgeEnabled": true
+      }
     },
     "web": {
-      "favicon": "./assets/logo/lectrum_logo.png",
-    }
+      "favicon": "./assets/logo/lectrum_logo.png"
+    },
+    "plugins": [
+      "expo-web-browser"
+    ]
   }
 }

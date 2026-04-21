@@ -58,6 +58,35 @@ const styles = StyleSheet.create({
     borderColor: Colors.gold,
     opacity: 0.3,
   },
+  authTitle: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: Colors.gold,
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  authSubtitle: {
+    fontSize: 14,
+    color: Colors.darkGray,
+    textAlign: 'center',
+    fontWeight: '500',
+    marginBottom: 12,
+  },
+  authLinkRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginBottom: 28,
+  },
+  authLinkText: {
+    fontSize: 14,
+    color: Colors.darkGray,
+    fontWeight: '500',
+  },
+  authLink: {
+    fontSize: 14,
+    color: Colors.primary,
+    fontWeight: '700',
+  },
   loginCard: {
     backgroundColor: Colors.white,
     borderRadius: 35,
