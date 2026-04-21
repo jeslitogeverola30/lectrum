@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS battles (
   quiz_id UUID REFERENCES quizzes(id) ON DELETE SET NULL,
   creator_id TEXT REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
   round_count INTEGER DEFAULT 5,
+  time_per_item INTEGER DEFAULT 20,
   status TEXT DEFAULT 'pending',
   winner_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT TIMEZONE('utc'::text, NOW()),

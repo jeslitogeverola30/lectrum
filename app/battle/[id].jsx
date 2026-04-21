@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth, useUser } from '@clerk/expo';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
-import { Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { Animated, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { Colors } from '../../styles/auth/auth_styles.js';
 
 const QUESTION_BANK = [
@@ -58,7 +58,9 @@ const QUESTION_BANK = [
   },
 ];
 
-const ROUND_SECONDS = 20;
+const DEFAULT_ROUND_SECONDS = 20;
+const MIN_ROUND_SECONDS = 5;
+const MAX_ROUND_SECONDS = 30;
 
 function buildRounds(roundsCount) {
   const normalizedCount = Math.max(1, Math.min(10, roundsCount));
@@ -75,22 +77,59 @@ export default function BattleArenaScreen() {
   const params = useLocalSearchParams();
 
   const requestedRounds = Number(Array.isArray(params.rounds) ? params.rounds[0] : params.rounds || 5);
+  const requestedTimePerItem = Number(
+    Array.isArray(params.timePerItem) ? params.timePerItem[0] : params.timePerItem || DEFAULT_ROUND_SECONDS
+  );
+  const roundSeconds = Math.max(MIN_ROUND_SECONDS, Math.min(MAX_ROUND_SECONDS, requestedTimePerItem));
   const roomName = Array.isArray(params.roomName) ? params.roomName[0] : params.roomName;
   const roomTopic = Array.isArray(params.roomTopic) ? params.roomTopic[0] : params.roomTopic;
 
   const rounds = useMemo(() => buildRounds(requestedRounds), [requestedRounds]);
   const [currentRoundIndex, setCurrentRoundIndex] = useState(0);
-  const [roundTimer, setRoundTimer] = useState(ROUND_SECONDS);
+  const [roundTimer, setRoundTimer] = useState(roundSeconds);
   const [selectedOption, setSelectedOption] = useState(null);
   const [score, setScore] = useState(0);
   const [streak, setStreak] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
   const [eloDelta, setEloDelta] = useState(0);
   const [showSummary, setShowSummary] = useState(false);
+  const pulseOpacity = useRef(new Animated.Value(0)).current;
 
   const baseElo = Number(user?.unsafeMetadata?.eloRating ?? 1240);
   const liveElo = baseElo + eloDelta;
   const currentRound = rounds[currentRoundIndex];
+  const isUrgent = roundTimer <= 5 && !showSummary;
+
+  useEffect(() => {
+    if (!isUrgent) {
+      pulseOpacity.stopAnimation();
+      pulseOpacity.setValue(0);
+      return undefined;
+    }
+
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseOpacity, {
+          toValue: 1,
+          duration: 650,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseOpacity, {
+          toValue: 0,
+          duration: 650,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+
+    pulseLoop.start();
+
+    return () => {
+      pulseLoop.stop();
+      pulseOpacity.stopAnimation();
+      pulseOpacity.setValue(0);
+    };
+  }, [isUrgent, pulseOpacity]);
 
   useEffect(() => {
     if (showSummary) {
@@ -124,7 +163,7 @@ export default function BattleArenaScreen() {
     }
 
     setCurrentRoundIndex((prev) => prev + 1);
-    setRoundTimer(ROUND_SECONDS);
+    setRoundTimer(roundSeconds);
     setSelectedOption(null);
   };
 
@@ -214,6 +253,21 @@ export default function BattleArenaScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
+      {isUrgent ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.urgentOverlay,
+            {
+              opacity: pulseOpacity.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0.15, 0.85],
+              }),
+            },
+          ]}
+        />
+      ) : null}
+
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}>
           <Ionicons name="chevron-back" size={20} color={Colors.textDark} />
@@ -271,6 +325,16 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#F4F7FB',
+  },
+  urgentOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    borderWidth: 5,
+    borderColor: 'rgba(208, 52, 52, 0.95)',
+    shadowColor: '#D03434',
+    shadowOpacity: 0.75,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 12,
   },
   header: {
     paddingHorizontal: 12,

@@ -45,6 +45,8 @@ export default function RoomChatScreen() {
   const [showWaitingRoom, setShowWaitingRoom] = useState(false);
   const [selectedFileName, setSelectedFileName] = useState('');
   const [selectedItemCount, setSelectedItemCount] = useState(5);
+  const [selectedTimePerItem, setSelectedTimePerItem] = useState(20);
+  const [activeBattle, setActiveBattle] = useState(null);
 
   const roomId = Array.isArray(params.id) ? params.id[0] : params.id;
   const roomName = Array.isArray(params.name) ? params.name[0] : params.name;
@@ -65,6 +67,7 @@ export default function RoomChatScreen() {
 
   const displayName = user?.username || user?.fullName || user?.primaryEmailAddress?.emailAddress || 'You';
   const isCreator = Boolean(roomRecord?.creator_id && user?.id && roomRecord.creator_id === user.id);
+  const creatorBattleReady = Boolean(activeBattle?.id && roomRecord?.creator_id && activeBattle.creator_id === roomRecord.creator_id);
 
   const ensureProfileRecord = async () => {
     if (!user?.id) {
@@ -130,7 +133,7 @@ export default function RoomChatScreen() {
         setCurrentRoomAvatar(roomData?.avatar_emoji || roomAvatar || '🎓');
       }
 
-      const [messageResult, memberResult] = await Promise.all([
+      const [messageResult, memberResult, battleResult] = await Promise.all([
         supabase
           .from('messages')
           .select('id, text, created_at, sender_id, sender:profiles(username)')
@@ -141,6 +144,13 @@ export default function RoomChatScreen() {
           .select('id, user_id, role, joined_at, member:profiles(username)')
           .eq('room_id', roomId)
           .order('joined_at', { ascending: true }),
+        supabase
+          .from('battles')
+          .select('id, creator_id, round_count, time_per_item, status, created_at')
+          .eq('room_id', roomId)
+          .in('status', ['pending', 'active'])
+          .order('created_at', { ascending: false })
+          .limit(1),
       ]);
 
       if (isActive) {
@@ -170,6 +180,12 @@ export default function RoomChatScreen() {
               role: member.role || (member.user_id === creatorId ? 'creator' : 'member'),
             }))
           );
+        }
+
+        if (!battleResult.error) {
+          setActiveBattle((battleResult.data ?? [])[0] ?? null);
+        } else {
+          setActiveBattle(null);
         }
       }
 
@@ -273,9 +289,39 @@ export default function RoomChatScreen() {
     }
   };
 
-  const handleStartQuizBattle = () => {
+  const handleStartQuizBattle = async () => {
     if (!selectedFileName) {
       Alert.alert('No file selected', 'Please upload a source file before starting the battle.');
+      return;
+    }
+
+    if (!isCreator || !roomId || !user?.id) {
+      Alert.alert('Cannot create battle', 'Only the creator can launch a battle.');
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('battles')
+        .insert([
+          {
+            room_id: roomId,
+            creator_id: user.id,
+            round_count: selectedItemCount,
+            time_per_item: selectedTimePerItem,
+            status: 'pending',
+          },
+        ])
+        .select('id, creator_id, round_count, time_per_item, status, created_at')
+        .single();
+
+      if (error) {
+        throw error;
+      }
+
+      setActiveBattle(data ?? null);
+    } catch (error) {
+      Alert.alert('Battle creation failed', error?.message || 'Unable to create battle right now.');
       return;
     }
 
@@ -283,7 +329,11 @@ export default function RoomChatScreen() {
     setShowWaitingRoom(true);
   };
 
-  const handleEnterBattleArena = () => {
+  const handleEnterBattleArena = async () => {
+    if (activeBattle?.id) {
+      await supabase.from('battles').update({ status: 'active' }).eq('id', activeBattle.id);
+    }
+
     setShowWaitingRoom(false);
     router.push({
       pathname: '/battle/[id]',
@@ -291,7 +341,26 @@ export default function RoomChatScreen() {
         id: roomId || 'room',
         roomName: roomName || 'Study Room',
         roomTopic: roomTopic || 'General Knowledge',
-        rounds: String(selectedItemCount),
+        rounds: String(activeBattle?.round_count || selectedItemCount),
+        timePerItem: String(activeBattle?.time_per_item || selectedTimePerItem),
+      },
+    });
+  };
+
+  const handleJoinCreatorBattle = () => {
+    if (!creatorBattleReady) {
+      Alert.alert('No active battle', 'The creator has not launched a battle yet.');
+      return;
+    }
+
+    router.push({
+      pathname: '/battle/[id]',
+      params: {
+        id: roomId || 'room',
+        roomName: roomRecord?.name || roomName || 'Study Room',
+        roomTopic: roomRecord?.topic || roomTopic || 'General Knowledge',
+        rounds: String(activeBattle?.round_count || 5),
+        timePerItem: String(activeBattle?.time_per_item || 20),
       },
     });
   };
@@ -430,13 +499,23 @@ export default function RoomChatScreen() {
         </View>
       </KeyboardAvoidingView>
 
-      <Pressable
-        onPress={() => setShowBattleConfig(true)}
-        style={({ pressed }) => [styles.battleFab, pressed && styles.battleFabPressed]}
-      >
-        <Ionicons name="flash" size={18} color={Colors.white} />
-        <Text style={styles.battleFabText}>Quiz Battle</Text>
-      </Pressable>
+      {isCreator ? (
+        <Pressable
+          onPress={() => setShowBattleConfig(true)}
+          style={({ pressed }) => [styles.battleFab, pressed && styles.battleFabPressed]}
+        >
+          <Ionicons name="flash" size={18} color={Colors.white} />
+          <Text style={styles.battleFabText}>Quiz Battle</Text>
+        </Pressable>
+      ) : creatorBattleReady ? (
+        <Pressable
+          onPress={handleJoinCreatorBattle}
+          style={({ pressed }) => [styles.battleFab, styles.joinBattleFab, pressed && styles.battleFabPressed]}
+        >
+          <Ionicons name="play" size={16} color={Colors.white} />
+          <Text style={styles.battleFabText}>Join Battle</Text>
+        </Pressable>
+      ) : null}
 
       <Modal
         visible={showConversationInfo}
@@ -532,7 +611,7 @@ export default function RoomChatScreen() {
             <View style={styles.infoHeader}>
               <View>
                 <Text style={styles.infoTitle}>Create Quiz Battle</Text>
-                <Text style={styles.infoSubtitle}>Upload source and choose item count.</Text>
+                <Text style={styles.infoSubtitle}>Upload source, choose items, and set timer.</Text>
               </View>
               <Pressable onPress={() => setShowBattleConfig(false)} style={styles.infoCloseButton}>
                 <Ionicons name="close" size={20} color={Colors.textDark} />
@@ -574,6 +653,25 @@ export default function RoomChatScreen() {
               </View>
             </View>
 
+            <View style={styles.sectionGroup}>
+              <Text style={styles.groupLabel}>Time Per Item (seconds)</Text>
+              <View style={styles.countRow}>
+                {[5, 10, 15, 20, 25, 30].map((seconds) => (
+                  <Pressable
+                    key={seconds}
+                    onPress={() => setSelectedTimePerItem(seconds)}
+                    style={({ pressed }) => [
+                      styles.countButton,
+                      selectedTimePerItem === seconds && styles.countButtonActive,
+                      pressed && styles.countButtonPressed,
+                    ]}
+                  >
+                    <Text style={[styles.countButtonText, selectedTimePerItem === seconds && styles.countButtonTextActive]}>{seconds}s</Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+
             <Pressable
               onPress={handleStartQuizBattle}
               style={({ pressed }) => [styles.launchBattleButton, pressed && styles.launchBattleButtonPressed]}
@@ -605,6 +703,7 @@ export default function RoomChatScreen() {
             <View style={styles.waitingMetaRow}>
               <Text style={styles.waitingMetaText}>Room: {roomName || 'Study Room'}</Text>
               <Text style={styles.waitingMetaText}>Items: {selectedItemCount}</Text>
+              <Text style={styles.waitingMetaText}>Time: {activeBattle?.time_per_item || selectedTimePerItem}s</Text>
             </View>
 
             <View style={styles.lobbyMembersCard}>
@@ -856,6 +955,9 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
     elevation: 6,
+  },
+  joinBattleFab: {
+    backgroundColor: Colors.accent,
   },
   battleFabPressed: {
     opacity: 0.9,
