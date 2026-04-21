@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth, useUser } from '@clerk/expo';
 import * as DocumentPicker from 'expo-document-picker';
@@ -18,53 +18,20 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { supabase } from '../../services/supabase.js';
 import { Colors } from '../../styles/auth/auth_styles.js';
 
-const ROOM_MESSAGES = {
-  'room-1': [
-    { id: 'm1', sender: 'Nova', text: 'Ready for another biology quiz?', mine: false, time: '09:02' },
-    { id: 'm2', sender: 'You', text: 'Yes, let\'s do cell respiration this time.', mine: true, time: '09:04' },
-  ],
-  'room-2': [
-    { id: 'm3', sender: 'Pulse', text: 'Anyone remembers the Silk Road timeline?', mine: false, time: '11:18' },
-    { id: 'm4', sender: 'You', text: 'I can share a quick summary in a bit.', mine: true, time: '11:19' },
-  ],
-};
+const formatRoomTime = (value) => {
+  if (!value) {
+    return 'Just now';
+  }
 
-const ROOM_CONVERSATIONS = {
-  'room-1': {
-    creatorName: 'You',
-    members: [
-      { id: 'u-you', name: 'You' },
-      { id: 'u-nova', name: 'Nova' },
-      { id: 'u-cipher', name: 'Cipher' },
-    ],
-  },
-  'room-2': {
-    creatorName: 'Pulse',
-    members: [
-      { id: 'u-you', name: 'You' },
-      { id: 'u-pulse', name: 'Pulse' },
-      { id: 'u-atlas', name: 'Atlas' },
-      { id: 'u-ember', name: 'Ember' },
-    ],
-  },
-  'room-3': {
-    creatorName: 'You',
-    members: [
-      { id: 'u-you', name: 'You' },
-      { id: 'u-byte', name: 'Byte' },
-    ],
-  },
-  'room-4': {
-    creatorName: 'Atlas',
-    members: [
-      { id: 'u-you', name: 'You' },
-      { id: 'u-atlas', name: 'Atlas' },
-      { id: 'u-zen', name: 'Zen' },
-      { id: 'u-nova', name: 'Nova' },
-    ],
-  },
+  const parsedDate = new Date(value);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return 'Just now';
+  }
+
+  return parsedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
 
 export default function RoomChatScreen() {
@@ -83,6 +50,11 @@ export default function RoomChatScreen() {
   const roomName = Array.isArray(params.name) ? params.name[0] : params.name;
   const roomTopic = Array.isArray(params.topic) ? params.topic[0] : params.topic;
   const roomAvatar = Array.isArray(params.avatar) ? params.avatar[0] : params.avatar;
+  const [roomRecord, setRoomRecord] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [roomMembers, setRoomMembers] = useState([]);
+  const [isLoadingRoom, setIsLoadingRoom] = useState(true);
+  const [roomError, setRoomError] = useState('');
   const [currentRoomAvatar, setCurrentRoomAvatar] = useState(roomAvatar || '🎓');
   const isRoomAvatarImage =
     typeof currentRoomAvatar === 'string' &&
@@ -91,17 +63,127 @@ export default function RoomChatScreen() {
       currentRoomAvatar.startsWith('http://') ||
       currentRoomAvatar.startsWith('https://'));
 
-  const messages = useMemo(() => ROOM_MESSAGES[roomId] ?? [], [roomId]);
-  const defaultConversation = useMemo(
-    () => ROOM_CONVERSATIONS[roomId] ?? { creatorName: 'You', members: [{ id: 'u-you', name: 'You' }] },
-    [roomId]
-  );
-  const [roomMembers, setRoomMembers] = useState(defaultConversation.members);
-
   const displayName = user?.username || user?.fullName || user?.primaryEmailAddress?.emailAddress || 'You';
-  const normalizedCurrentName = String(displayName).toLowerCase();
-  const normalizedCreatorName = String(defaultConversation.creatorName).toLowerCase();
-  const isCreator = normalizedCurrentName === normalizedCreatorName || defaultConversation.creatorName === 'You';
+  const isCreator = Boolean(roomRecord?.creator_id && user?.id && roomRecord.creator_id === user.id);
+
+  const ensureProfileRecord = async () => {
+    if (!user?.id) {
+      return;
+    }
+
+    const { error } = await supabase.from('profiles').upsert(
+      {
+        id: user.id,
+        email: user?.primaryEmailAddress?.emailAddress || null,
+        username: user?.username || user?.fullName || user?.primaryEmailAddress?.emailAddress?.split('@')[0] || 'Member',
+        avatar_emoji: '👤',
+      },
+      { onConflict: 'id' }
+    );
+
+    if (error) {
+      throw error;
+    }
+  };
+
+  useEffect(() => {
+    let isActive = true;
+
+    const loadRoom = async () => {
+      if (!roomId) {
+        if (isActive) {
+          setRoomError('Missing room id.');
+          setIsLoadingRoom(false);
+        }
+        return;
+      }
+
+      setIsLoadingRoom(true);
+      setRoomError('');
+
+      try {
+        await ensureProfileRecord();
+      } catch (error) {
+        if (isActive) {
+          setRoomError(error?.message || 'Failed to sync your profile.');
+          setIsLoadingRoom(false);
+        }
+        return;
+      }
+
+      const { data: roomData, error: roomQueryError } = await supabase
+        .from('rooms')
+        .select('id, name, topic, avatar_emoji, creator_id, creator:profiles(username)')
+        .eq('id', roomId)
+        .maybeSingle();
+
+      if (roomQueryError) {
+        if (isActive) {
+          setRoomError(roomQueryError.message);
+          setIsLoadingRoom(false);
+        }
+        return;
+      }
+
+      if (isActive) {
+        setRoomRecord(roomData ?? null);
+        setCurrentRoomAvatar(roomData?.avatar_emoji || roomAvatar || '🎓');
+      }
+
+      const [messageResult, memberResult] = await Promise.all([
+        supabase
+          .from('messages')
+          .select('id, text, created_at, sender_id, sender:profiles(username)')
+          .eq('room_id', roomId)
+          .order('created_at', { ascending: true }),
+        supabase
+          .from('room_members')
+          .select('id, user_id, role, joined_at, member:profiles(username)')
+          .eq('room_id', roomId)
+          .order('joined_at', { ascending: true }),
+      ]);
+
+      if (isActive) {
+        if (!messageResult.error) {
+          setMessages(
+            (messageResult.data ?? []).map((message) => ({
+              id: message.id,
+              sender: message.sender?.username || message.sender_id || 'Member',
+              text: message.text,
+              mine: message.sender_id === user?.id,
+              time: formatRoomTime(message.created_at),
+            }))
+          );
+        } else {
+          setRoomError(messageResult.error.message);
+          setMessages([]);
+        }
+
+        if (!memberResult.error) {
+          const creatorId = roomData?.creator_id;
+
+          setRoomMembers(
+            (memberResult.data ?? []).map((member) => ({
+              id: member.id,
+              userId: member.user_id,
+              name: member.member?.username || (member.user_id === user?.id ? 'You' : 'Member'),
+              role: member.role || (member.user_id === creatorId ? 'creator' : 'member'),
+            }))
+          );
+        }
+      }
+
+      if (isActive) {
+        setIsLoadingRoom(false);
+      }
+    };
+
+    loadRoom();
+
+    return () => {
+      isActive = false;
+    };
+  }, [roomAvatar, roomId, user?.id, user?.fullName, user?.primaryEmailAddress?.emailAddress, user?.username]);
 
   if (!isLoaded) {
     return null;
@@ -112,16 +194,53 @@ export default function RoomChatScreen() {
   }
 
   const handleUpload = () => {
-    Alert.alert('Upload', 'Attachment picker will be available soon.');
+    handlePickSource();
   };
 
-  const handleSend = () => {
-    if (!inputMessage.trim()) {
+  const handleSend = async () => {
+    const trimmedMessage = inputMessage.trim();
+
+    if (!trimmedMessage) {
       return;
     }
 
-    Alert.alert('Message sent', inputMessage.trim());
-    setInputMessage('');
+    if (!roomId || !user?.id) {
+      Alert.alert('Cannot send message', 'Room data is still loading.');
+      return;
+    }
+
+    try {
+      await ensureProfileRecord();
+
+      const { data, error } = await supabase.rpc('send_room_message', {
+        p_sender_id: user.id,
+        p_room_id: roomId,
+        p_text: trimmedMessage,
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      const createdMessage = Array.isArray(data) ? data[0] : data;
+
+      if (createdMessage?.id) {
+        setMessages((prevMessages) => [
+          ...prevMessages,
+          {
+            id: createdMessage.id,
+            sender: displayName,
+            text: createdMessage.text,
+            mine: true,
+            time: formatRoomTime(createdMessage.created_at),
+          },
+        ]);
+      }
+
+      setInputMessage('');
+    } catch (error) {
+      Alert.alert('Message failed', error?.message || 'Unable to send message right now.');
+    }
   };
 
   const handlePickSource = async () => {
@@ -178,7 +297,7 @@ export default function RoomChatScreen() {
   };
 
   const handleRemoveMember = (member) => {
-    if (!isCreator || member.name === defaultConversation.creatorName) {
+    if (!isCreator || member.role === 'creator') {
       return;
     }
 
@@ -256,8 +375,8 @@ export default function RoomChatScreen() {
             )}
           </View>
           <View>
-            <Text style={styles.headerTitle}>{roomName || 'Room Chat'}</Text>
-            <Text style={styles.headerSubtitle}>{roomTopic || 'Study Room'}</Text>
+            <Text style={styles.headerTitle}>{roomRecord?.name || roomName || 'Room Chat'}</Text>
+            <Text style={styles.headerSubtitle}>{roomRecord?.topic || roomTopic || 'Study Room'}</Text>
           </View>
         </View>
 
@@ -279,7 +398,15 @@ export default function RoomChatScreen() {
           keyExtractor={(item) => item.id}
           renderItem={renderMessage}
           contentContainerStyle={styles.messagesContent}
-          ListEmptyComponent={<Text style={styles.emptyText}>No messages yet. Start the conversation.</Text>}
+          ListEmptyComponent={
+            roomError ? (
+              <Text style={styles.emptyText}>{roomError}</Text>
+            ) : isLoadingRoom ? (
+              <Text style={styles.emptyText}>Loading room data from Supabase...</Text>
+            ) : (
+              <Text style={styles.emptyText}>No messages yet. Start the conversation.</Text>
+            )
+          }
         />
 
         <View style={styles.composerWrap}>
@@ -330,7 +457,7 @@ export default function RoomChatScreen() {
             </View>
 
             <View style={styles.creatorPill}>
-              <Text style={styles.creatorText}>Creator: {defaultConversation.creatorName}</Text>
+              <Text style={styles.creatorText}>Creator: {roomRecord?.creator?.username || (isCreator ? displayName : 'Unknown')}</Text>
             </View>
 
             <View style={styles.roomPhotoCard}>
@@ -362,7 +489,7 @@ export default function RoomChatScreen() {
 
             <View style={styles.membersList}>
               {roomMembers.map((member) => {
-                const isMemberCreator = member.name === defaultConversation.creatorName;
+                const isMemberCreator = member.role === 'creator' || member.userId === roomRecord?.creator_id;
                 const canRemove = isCreator && !isMemberCreator;
                 const initial = member.name.slice(0, 1).toUpperCase();
 
@@ -483,7 +610,7 @@ export default function RoomChatScreen() {
             <View style={styles.lobbyMembersCard}>
               <Text style={styles.lobbyMembersTitle}>Lobby Members</Text>
               {roomMembers.map((member) => {
-                const isMemberCreator = member.name === defaultConversation.creatorName;
+                const isMemberCreator = member.role === 'creator' || member.userId === roomRecord?.creator_id;
                 const initial = member.name.slice(0, 1).toUpperCase();
 
                 return (

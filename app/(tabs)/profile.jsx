@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useClerk, useAuth, useUser } from '@clerk/expo';
-import { Redirect, useRouter } from 'expo-router';
+import { Redirect } from 'expo-router';
 import {
   ActivityIndicator,
   Alert,
@@ -25,7 +25,6 @@ const getRankBadge = (elo) => {
 };
 
 export default function ProfileTabScreen() {
-  const router = useRouter();
   const { signOut } = useClerk();
   const { isLoaded, isSignedIn } = useAuth();
   const { user } = useUser();
@@ -47,8 +46,12 @@ export default function ProfileTabScreen() {
   }, [user]);
 
   const handleLogout = async () => {
-    await signOut();
-    router.replace('/auth/sign_in');
+    try {
+      await signOut();
+    } catch (error) {
+      Alert.alert('Sign out failed', 'Unable to sign out right now.');
+      console.error(error);
+    }
   };
 
   const persistPreferences = async (nextPreferences) => {

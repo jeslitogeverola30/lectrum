@@ -155,6 +155,8 @@ export default function HistoryTabScreen() {
   const { isLoaded, isSignedIn } = useAuth();
   const [selectedMatchId, setSelectedMatchId] = useState(null);
   const [showMatchReview, setShowMatchReview] = useState(false);
+  const stats = useMemo(() => getStats(MATCHES), []);
+  const selectedMatch = MATCHES.find((match) => match.id === selectedMatchId);
 
   if (!isLoaded) {
     return null;
@@ -163,9 +165,6 @@ export default function HistoryTabScreen() {
   if (!isSignedIn) {
     return <Redirect href="/auth/sign_in" />;
   }
-
-  const stats = useMemo(() => getStats(MATCHES), []);
-  const selectedMatch = MATCHES.find((match) => match.id === selectedMatchId);
 
   const handleMatchPress = (matchId) => {
     setSelectedMatchId(matchId);
