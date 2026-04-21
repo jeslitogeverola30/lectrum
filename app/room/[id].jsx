@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth, useUser } from '@clerk/expo';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystemLegacy from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import {
@@ -34,6 +35,33 @@ const formatRoomTime = (value) => {
   return parsedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 };
 
+const readUriAsBase64 = async (uri) => {
+  try {
+    return await FileSystemLegacy.readAsStringAsync(uri, {
+      encoding: FileSystemLegacy.EncodingType.Base64,
+    });
+  } catch (_) {
+    // Some providers expose URIs that fail direct fs reads; fetch + blob works in those cases.
+    const response = await fetch(uri);
+    if (!response.ok) {
+      throw new Error('Unable to read the selected file. Please pick it again.');
+    }
+
+    const blob = await response.blob();
+    const base64FromBlob = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const value = typeof reader.result === 'string' ? reader.result : '';
+        resolve(value.includes(',') ? value.split(',')[1] : value);
+      };
+      reader.onerror = () => reject(new Error('Failed to convert file to base64.'));
+      reader.readAsDataURL(blob);
+    });
+
+    return base64FromBlob;
+  }
+};
+
 export default function RoomChatScreen() {
   const { isLoaded, isSignedIn } = useAuth();
   const { user } = useUser();
@@ -44,6 +72,8 @@ export default function RoomChatScreen() {
   const [showBattleConfig, setShowBattleConfig] = useState(false);
   const [showWaitingRoom, setShowWaitingRoom] = useState(false);
   const [selectedFileName, setSelectedFileName] = useState('');
+  const [selectedSourceFile, setSelectedSourceFile] = useState(null);
+  const [isCreatingBattle, setIsCreatingBattle] = useState(false);
   const [selectedItemCount, setSelectedItemCount] = useState(5);
   const [selectedTimePerItem, setSelectedTimePerItem] = useState(20);
   const [activeBattle, setActiveBattle] = useState(null);
@@ -146,7 +176,7 @@ export default function RoomChatScreen() {
           .order('joined_at', { ascending: true }),
         supabase
           .from('battles')
-          .select('id, creator_id, round_count, time_per_item, status, created_at')
+          .select('id, creator_id, quiz_id, round_count, time_per_item, status, created_at')
           .eq('room_id', roomId)
           .in('status', ['pending', 'active'])
           .order('created_at', { ascending: false })
@@ -281,8 +311,26 @@ export default function RoomChatScreen() {
         return;
       }
 
-      setSelectedFileName(pickedFile.name || 'uploaded-file');
-      Alert.alert('File selected', `Attached ${pickedFile.name || 'uploaded-file'}.`);
+      const mimeType = pickedFile.mimeType || '';
+      const fileName = pickedFile.name || 'uploaded-file';
+      const normalizedName = fileName.toLowerCase();
+      const isPdf = mimeType.includes('pdf') || normalizedName.endsWith('.pdf');
+      const isDocx =
+        mimeType.includes('officedocument.wordprocessingml.document') ||
+        normalizedName.endsWith('.docx');
+
+      if (!isPdf && !isDocx) {
+        Alert.alert('Unsupported file', 'Please upload a PDF or DOCX file.');
+        return;
+      }
+
+      setSelectedSourceFile({
+        name: fileName,
+        uri: pickedFile.uri,
+        mimeType: mimeType || (isPdf ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+      });
+      setSelectedFileName(fileName);
+      Alert.alert('File selected', `Attached ${fileName}.`);
     } catch (error) {
       Alert.alert('Upload failed', 'Unable to pick a file right now.');
       console.error(error);
@@ -290,7 +338,7 @@ export default function RoomChatScreen() {
   };
 
   const handleStartQuizBattle = async () => {
-    if (!selectedFileName) {
+    if (!selectedSourceFile) {
       Alert.alert('No file selected', 'Please upload a source file before starting the battle.');
       return;
     }
@@ -301,18 +349,73 @@ export default function RoomChatScreen() {
     }
 
     try {
+      setIsCreatingBattle(true);
+
+      if (!selectedSourceFile?.uri) {
+        throw new Error('Selected file is missing a readable URI. Please pick the file again.');
+      }
+
+      const fileBase64 = await readUriAsBase64(selectedSourceFile.uri);
+
+      const { data: edgeData, error: edgeError } = await supabase.functions.invoke('generate-quiz', {
+        body: {
+          file_base64: fileBase64,
+          file_mime_type: selectedSourceFile.mimeType,
+          file_name: selectedSourceFile.name,
+          question_count: selectedItemCount,
+          input_text: roomRecord?.topic || roomTopic || '',
+        },
+      });
+
+      if (edgeError || edgeData?.error) {
+        let edgeErrorMessage = edgeError?.message;
+
+        if (edgeError?.context && typeof edgeError.context.json === 'function') {
+          const payload = await edgeError.context.json().catch(() => null);
+          if (payload?.error) {
+            edgeErrorMessage = payload.error;
+          }
+        }
+
+        throw new Error(edgeErrorMessage || edgeData?.error || 'Failed to generate quiz from source file.');
+      }
+
+      const generatedQuiz = Array.isArray(edgeData?.quiz) ? edgeData.quiz : [];
+      if (!generatedQuiz.length) {
+        throw new Error('No quiz items were generated from the uploaded file.');
+      }
+
+      const { data: quizRow, error: quizError } = await supabase
+        .from('quizzes')
+        .insert([
+          {
+            creator_id: user.id,
+            topic: roomRecord?.topic || roomTopic || selectedSourceFile.name,
+            description: `Generated from ${selectedSourceFile.name}`,
+            raw_json_content: generatedQuiz,
+            question_count: generatedQuiz.length,
+          },
+        ])
+        .select('id')
+        .single();
+
+      if (quizError || !quizRow?.id) {
+        throw quizError || new Error('Quiz could not be saved.');
+      }
+
       const { data, error } = await supabase
         .from('battles')
         .insert([
           {
             room_id: roomId,
+            quiz_id: quizRow.id,
             creator_id: user.id,
             round_count: selectedItemCount,
             time_per_item: selectedTimePerItem,
             status: 'pending',
           },
         ])
-        .select('id, creator_id, round_count, time_per_item, status, created_at')
+        .select('id, creator_id, quiz_id, round_count, time_per_item, status, created_at')
         .single();
 
       if (error) {
@@ -323,6 +426,8 @@ export default function RoomChatScreen() {
     } catch (error) {
       Alert.alert('Battle creation failed', error?.message || 'Unable to create battle right now.');
       return;
+    } finally {
+      setIsCreatingBattle(false);
     }
 
     setShowBattleConfig(false);
@@ -341,6 +446,8 @@ export default function RoomChatScreen() {
         id: roomId || 'room',
         roomName: roomName || 'Study Room',
         roomTopic: roomTopic || 'General Knowledge',
+        battleId: activeBattle?.id || '',
+        quizId: activeBattle?.quiz_id || '',
         rounds: String(activeBattle?.round_count || selectedItemCount),
         timePerItem: String(activeBattle?.time_per_item || selectedTimePerItem),
       },
@@ -359,6 +466,8 @@ export default function RoomChatScreen() {
         id: roomId || 'room',
         roomName: roomRecord?.name || roomName || 'Study Room',
         roomTopic: roomRecord?.topic || roomTopic || 'General Knowledge',
+        battleId: activeBattle?.id || '',
+        quizId: activeBattle?.quiz_id || '',
         rounds: String(activeBattle?.round_count || 5),
         timePerItem: String(activeBattle?.time_per_item || 20),
       },
@@ -631,7 +740,7 @@ export default function RoomChatScreen() {
               <Text style={styles.selectedFileText}>
                 {selectedFileName ? `Selected: ${selectedFileName}` : 'No file selected'}
               </Text>
-              <Text style={styles.sourceHintText}>Supports PDF, DOC, and DOCX</Text>
+              <Text style={styles.sourceHintText}>Supports PDF and DOCX</Text>
             </View>
 
             <View style={styles.sectionGroup}>
@@ -674,10 +783,15 @@ export default function RoomChatScreen() {
 
             <Pressable
               onPress={handleStartQuizBattle}
-              style={({ pressed }) => [styles.launchBattleButton, pressed && styles.launchBattleButtonPressed]}
+              disabled={isCreatingBattle}
+              style={({ pressed }) => [
+                styles.launchBattleButton,
+                isCreatingBattle && styles.launchBattleButtonDisabled,
+                pressed && styles.launchBattleButtonPressed,
+              ]}
             >
               <Ionicons name="rocket-outline" size={18} color={Colors.white} />
-              <Text style={styles.launchBattleText}>Launch Battle</Text>
+              <Text style={styles.launchBattleText}>{isCreatingBattle ? 'Generating Quiz...' : 'Launch Battle'}</Text>
             </Pressable>
           </View>
         </Pressable>
@@ -1216,6 +1330,9 @@ const styles = StyleSheet.create({
   },
   launchBattleButtonPressed: {
     opacity: 0.85,
+  },
+  launchBattleButtonDisabled: {
+    opacity: 0.6,
   },
   launchBattleText: {
     color: Colors.white,

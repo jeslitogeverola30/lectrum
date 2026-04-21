@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth, useUser } from '@clerk/expo';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
-import { Animated, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { supabase } from '../../services/supabase.js';
 import { Colors } from '../../styles/auth/auth_styles.js';
 
-const QUESTION_BANK = [
+const FALLBACK_QUESTION_BANK = [
   {
     prompt: 'What is the powerhouse of the cell?',
     options: ['Ribosome', 'Mitochondrion', 'Nucleus', 'Golgi apparatus'],
@@ -62,12 +63,47 @@ const DEFAULT_ROUND_SECONDS = 20;
 const MIN_ROUND_SECONDS = 5;
 const MAX_ROUND_SECONDS = 30;
 
-function buildRounds(roundsCount) {
+function buildFallbackRounds(roundsCount) {
   const normalizedCount = Math.max(1, Math.min(10, roundsCount));
   return Array.from({ length: normalizedCount }, (_, index) => {
-    const question = QUESTION_BANK[index % QUESTION_BANK.length];
+    const question = FALLBACK_QUESTION_BANK[index % FALLBACK_QUESTION_BANK.length];
     return { ...question, id: `round-${index + 1}` };
   });
+}
+
+function mapQuizToRounds(rawQuizItems, roundsCount) {
+  if (!Array.isArray(rawQuizItems)) {
+    return [];
+  }
+
+  const maxRounds = Math.max(1, Math.min(10, roundsCount));
+
+  return rawQuizItems
+    .slice(0, maxRounds)
+    .map((item, index) => {
+      const options = Array.isArray(item?.options)
+        ? item.options.map((option) => String(option)).filter(Boolean).slice(0, 4)
+        : [];
+
+      const answerIndex = Number.isInteger(item?.answerIndex)
+        ? item.answerIndex
+        : Number.parseInt(String(item?.answerIndex ?? 0), 10);
+
+      const prompt = String(item?.question ?? '').trim();
+      if (!prompt || options.length < 2) {
+        return null;
+      }
+
+      const safeAnswerIndex = Number.isInteger(answerIndex) && answerIndex >= 0 && answerIndex < options.length ? answerIndex : 0;
+
+      return {
+        id: `round-${index + 1}`,
+        prompt,
+        options,
+        answer: options[safeAnswerIndex],
+      };
+    })
+    .filter(Boolean);
 }
 
 export default function BattleArenaScreen() {
@@ -83,8 +119,12 @@ export default function BattleArenaScreen() {
   const roundSeconds = Math.max(MIN_ROUND_SECONDS, Math.min(MAX_ROUND_SECONDS, requestedTimePerItem));
   const roomName = Array.isArray(params.roomName) ? params.roomName[0] : params.roomName;
   const roomTopic = Array.isArray(params.roomTopic) ? params.roomTopic[0] : params.roomTopic;
+  const quizId = Array.isArray(params.quizId) ? params.quizId[0] : params.quizId;
 
-  const rounds = useMemo(() => buildRounds(requestedRounds), [requestedRounds]);
+  const [rounds, setRounds] = useState(() => buildFallbackRounds(requestedRounds));
+  const [resolvedTopic, setResolvedTopic] = useState(roomTopic || 'General Knowledge');
+  const [isLoadingQuiz, setIsLoadingQuiz] = useState(Boolean(quizId));
+  const [quizError, setQuizError] = useState('');
   const [currentRoundIndex, setCurrentRoundIndex] = useState(0);
   const [roundTimer, setRoundTimer] = useState(roundSeconds);
   const [selectedOption, setSelectedOption] = useState(null);
@@ -99,6 +139,71 @@ export default function BattleArenaScreen() {
   const liveElo = baseElo + eloDelta;
   const currentRound = rounds[currentRoundIndex];
   const isUrgent = roundTimer <= 5 && !showSummary;
+
+  useEffect(() => {
+    let isActive = true;
+
+    const loadQuiz = async () => {
+      if (!quizId) {
+        if (isActive) {
+          setRounds(buildFallbackRounds(requestedRounds));
+          setResolvedTopic(roomTopic || 'General Knowledge');
+          setIsLoadingQuiz(false);
+          setQuizError('');
+        }
+        return;
+      }
+
+      setIsLoadingQuiz(true);
+      setQuizError('');
+
+      const { data, error } = await supabase
+        .from('quizzes')
+        .select('topic, raw_json_content')
+        .eq('id', quizId)
+        .maybeSingle();
+
+      if (!isActive) {
+        return;
+      }
+
+      if (error || !data) {
+        setQuizError(error?.message || 'Quiz data not found. Using fallback questions.');
+        setRounds(buildFallbackRounds(requestedRounds));
+        setResolvedTopic(roomTopic || 'General Knowledge');
+        setIsLoadingQuiz(false);
+        return;
+      }
+
+      const mappedRounds = mapQuizToRounds(data.raw_json_content, requestedRounds);
+      if (!mappedRounds.length) {
+        setQuizError('Quiz content is invalid. Using fallback questions.');
+        setRounds(buildFallbackRounds(requestedRounds));
+      } else {
+        setRounds(mappedRounds);
+      }
+
+      setResolvedTopic(data.topic || roomTopic || 'General Knowledge');
+      setIsLoadingQuiz(false);
+    };
+
+    loadQuiz();
+
+    return () => {
+      isActive = false;
+    };
+  }, [quizId, requestedRounds, roomTopic]);
+
+  useEffect(() => {
+    setCurrentRoundIndex(0);
+    setRoundTimer(roundSeconds);
+    setSelectedOption(null);
+    setScore(0);
+    setStreak(0);
+    setCorrectCount(0);
+    setEloDelta(0);
+    setShowSummary(false);
+  }, [rounds, roundSeconds]);
 
   useEffect(() => {
     if (!isUrgent) {
@@ -154,6 +259,17 @@ export default function BattleArenaScreen() {
 
   if (!isSignedIn) {
     return <Redirect href="/auth/sign_in" />;
+  }
+
+  if (isLoadingQuiz) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator size="large" color={Colors.primary} />
+          <Text style={styles.loadingText}>Preparing battle quiz from your uploaded source...</Text>
+        </View>
+      </SafeAreaView>
+    );
   }
 
   const goToNextRound = () => {
@@ -220,7 +336,7 @@ export default function BattleArenaScreen() {
 
         <View style={styles.summaryCard}>
           <Text style={styles.summaryRoom}>{roomName || 'Battle Arena'}</Text>
-          <Text style={styles.summaryTopic}>{roomTopic || 'General Knowledge'}</Text>
+          <Text style={styles.summaryTopic}>{resolvedTopic || 'General Knowledge'}</Text>
 
           <View style={styles.summaryGrid}>
             <View style={styles.summaryMetric}>
@@ -296,7 +412,7 @@ export default function BattleArenaScreen() {
       </View>
 
       <View style={styles.questionCard}>
-        <Text style={styles.questionTopic}>{roomTopic || 'General Knowledge'}</Text>
+        <Text style={styles.questionTopic}>{resolvedTopic || 'General Knowledge'}</Text>
         <Text style={styles.questionText}>{currentRound.prompt}</Text>
 
         <View style={styles.optionsList}>
@@ -314,7 +430,7 @@ export default function BattleArenaScreen() {
       </View>
 
       <View style={styles.footerRow}>
-        <Text style={styles.footerScore}>Score: {score}</Text>
+        <Text style={styles.footerScore}>{quizError ? 'Fallback Mode · ' : ''}Score: {score}</Text>
         <Text style={styles.footerBonus}>Streak bonus: +{streak >= 2 ? (streak - 1) * 2 : 0}</Text>
       </View>
     </SafeAreaView>
@@ -325,6 +441,18 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#F4F7FB',
+  },
+  loadingWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    paddingHorizontal: 20,
+  },
+  loadingText: {
+    color: Colors.darkGray,
+    fontSize: 13,
+    textAlign: 'center',
   },
   urgentOverlay: {
     ...StyleSheet.absoluteFillObject,

@@ -79,7 +79,7 @@ export default function CreateQuiz({ session, creatorId }) {
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#0000ff" />
-          <Text style={styles.loadingText}>Gemini is generating your quiz...</Text>
+          <Text style={styles.loadingText}>Groq is generating your quiz...</Text>
         </View>
       ) : (
         <Button title="Generate AI Quiz" onPress={handleGenerateQuiz} />
