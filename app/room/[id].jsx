@@ -26,6 +26,7 @@ const formatRoomTime = (value) => {
   if (!value) {
     return 'Just now';
   }
+  
 
   const parsedDate = new Date(value);
   if (Number.isNaN(parsedDate.getTime())) {
@@ -146,7 +147,7 @@ export default function RoomChatScreen() {
 
       const { data: roomData, error: roomQueryError } = await supabase
         .from('rooms')
-        .select('id, name, topic, avatar_emoji, creator_id, creator:profiles(username)')
+        .select('id, name, topic, avatar_emoji, room_code, creator_id, creator:profiles(username)')
         .eq('id', roomId)
         .maybeSingle();
 
@@ -636,8 +637,9 @@ export default function RoomChatScreen() {
           <View style={styles.infoPanel}>
             <View style={styles.infoHeader}>
               <View>
-                <Text style={styles.infoTitle}>Conversation Info</Text>
+                <Text style={styles.infoTitle}>Room Info</Text>
                 <Text style={styles.infoSubtitle}>{roomMembers.length} members</Text>
+                <Text style={styles.infoRoomCode}>Code: {roomRecord?.room_code || '-----'}</Text>
               </View>
               <Pressable onPress={() => setShowConversationInfo(false)} style={styles.infoCloseButton}>
                 <Ionicons name="close" size={20} color={Colors.textDark} />
@@ -1111,6 +1113,12 @@ const styles = StyleSheet.create({
     color: Colors.darkGray,
     fontSize: 12,
     marginTop: 2,
+  },
+  infoRoomCode: {
+    color: Colors.darkGray,
+    fontSize: 12,
+    marginTop: 2,
+    fontWeight: '600',
   },
   infoCloseButton: {
     width: 34,
