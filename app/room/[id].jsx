@@ -20,6 +20,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../../services/supabase.js';
+import { GAME_PHASES, useGameStore } from '../../store/gameStore.js';
 import { Colors } from '../../styles/auth/auth_styles.js';
 
 const formatRoomTime = (value) => {
@@ -78,6 +79,7 @@ export default function RoomChatScreen() {
   const [selectedItemCount, setSelectedItemCount] = useState(5);
   const [selectedTimePerItem, setSelectedTimePerItem] = useState(20);
   const [activeBattle, setActiveBattle] = useState(null);
+  const [didNavigateToArena, setDidNavigateToArena] = useState(false);
 
   const roomId = Array.isArray(params.id) ? params.id[0] : params.id;
   const roomName = Array.isArray(params.name) ? params.name[0] : params.name;
@@ -99,6 +101,24 @@ export default function RoomChatScreen() {
   const displayName = user?.username || user?.fullName || user?.primaryEmailAddress?.emailAddress || 'You';
   const isCreator = Boolean(roomRecord?.creator_id && user?.id && roomRecord.creator_id === user.id);
   const creatorBattleReady = Boolean(activeBattle?.id && roomRecord?.creator_id && activeBattle.creator_id === roomRecord.creator_id);
+
+  const gamePhase = useGameStore((state) => state.phase);
+  const localHasJoinedLobby = useGameStore((state) => state.localHasJoinedLobby);
+  const localIsReady = useGameStore((state) => state.localIsReady);
+  const connectionStatus = useGameStore((state) => state.connectionStatus);
+  const battleRealtimeError = useGameStore((state) => state.lastError);
+  const hydrateBattleSession = useGameStore((state) => state.hydrateBattleSession);
+  const joinLobby = useGameStore((state) => state.joinLobby);
+  const setLocalReady = useGameStore((state) => state.setLocalReady);
+  const startBattle = useGameStore((state) => state.startBattle);
+  const getLobbyMembers = useGameStore((state) => state.getLobbyMembers);
+  const getAllActivePlayers = useGameStore((state) => state.getAllActivePlayers);
+  const canCreatorStartBattle = useGameStore((state) => state.canCreatorStartBattle);
+
+  const lobbyMembers = getLobbyMembers();
+  const activeLobbyPlayers = getAllActivePlayers();
+  const waitingCount = lobbyMembers.filter((member) => !member.isReady).length;
+  const canStartNow = canCreatorStartBattle();
 
   const ensureProfileRecord = async () => {
     if (!user?.id) {
@@ -231,6 +251,104 @@ export default function RoomChatScreen() {
       isActive = false;
     };
   }, [roomAvatar, roomId, user?.id, user?.fullName, user?.primaryEmailAddress?.emailAddress, user?.username]);
+
+  const hydrateSessionForBattle = (battle) => {
+    if (!battle?.id || !roomId || !user?.id) {
+      return;
+    }
+
+    hydrateBattleSession({
+      roomId,
+      battleId: battle.id,
+      creatorId: roomRecord?.creator_id || battle.creator_id,
+      currentUserId: user.id,
+      currentUserName: displayName,
+      isCreatorClient: isCreator,
+      questionCount: battle.round_count || selectedItemCount,
+      roundDurationSec: battle.time_per_item || selectedTimePerItem,
+    });
+  };
+
+  useEffect(() => {
+    if (!roomId) {
+      return undefined;
+    }
+
+    const battleChannel = supabase
+      .channel(`room-battles-${roomId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'battles', filter: `room_id=eq.${roomId}` },
+        async () => {
+          const { data, error } = await supabase
+            .from('battles')
+            .select('id, creator_id, quiz_id, round_count, time_per_item, status, created_at')
+            .eq('room_id', roomId)
+            .in('status', ['pending', 'active'])
+            .order('created_at', { ascending: false })
+            .limit(1);
+
+          if (!error) {
+            setActiveBattle((data ?? [])[0] ?? null);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(battleChannel);
+    };
+  }, [roomId]);
+
+  useEffect(() => {
+    if (gamePhase !== GAME_PHASES.ROUND || !activeBattle?.id || didNavigateToArena) {
+      return;
+    }
+
+    setDidNavigateToArena(true);
+    setShowWaitingRoom(false);
+
+    router.push({
+      pathname: '/battle/[id]',
+      params: {
+        id: roomId || 'room',
+        roomName: roomRecord?.name || roomName || 'Study Room',
+        roomTopic: roomRecord?.topic || roomTopic || 'General Knowledge',
+        creatorId: roomRecord?.creator_id || activeBattle.creator_id || '',
+        battleId: activeBattle.id,
+        quizId: activeBattle.quiz_id || '',
+        rounds: String(activeBattle.round_count || selectedItemCount),
+        timePerItem: String(activeBattle.time_per_item || selectedTimePerItem),
+      },
+    });
+  }, [
+    activeBattle?.id,
+    activeBattle?.quiz_id,
+    activeBattle?.round_count,
+    activeBattle?.time_per_item,
+    didNavigateToArena,
+    gamePhase,
+    roomId,
+    roomName,
+    roomRecord?.name,
+    roomRecord?.topic,
+    roomTopic,
+    router,
+    selectedItemCount,
+    selectedTimePerItem,
+  ]);
+
+  useEffect(() => {
+    if (gamePhase === GAME_PHASES.LOBBY || gamePhase === GAME_PHASES.IDLE) {
+      setDidNavigateToArena(false);
+    }
+  }, [gamePhase]);
+
+  useEffect(() => {
+    if (showWaitingRoom && activeBattle?.id) {
+      hydrateSessionForBattle(activeBattle);
+    }
+  }, [activeBattle, showWaitingRoom]);
 
   if (!isLoaded) {
     return null;
@@ -424,6 +542,7 @@ export default function RoomChatScreen() {
       }
 
       setActiveBattle(data ?? null);
+      hydrateSessionForBattle(data ?? null);
     } catch (error) {
       Alert.alert('Battle creation failed', error?.message || 'Unable to create battle right now.');
       return;
@@ -435,44 +554,37 @@ export default function RoomChatScreen() {
     setShowWaitingRoom(true);
   };
 
-  const handleEnterBattleArena = async () => {
-    if (activeBattle?.id) {
-      await supabase.from('battles').update({ status: 'active' }).eq('id', activeBattle.id);
+  const handleCreatorStartBattle = async () => {
+    const started = await startBattle();
+    if (!started) {
+      Alert.alert(
+        'Start blocked',
+        'You need at least one joined member, and everyone in the lobby must be ready before starting.'
+      );
+      return;
     }
 
-    setShowWaitingRoom(false);
-    router.push({
-      pathname: '/battle/[id]',
-      params: {
-        id: roomId || 'room',
-        roomName: roomName || 'Study Room',
-        roomTopic: roomTopic || 'General Knowledge',
-        battleId: activeBattle?.id || '',
-        quizId: activeBattle?.quiz_id || '',
-        rounds: String(activeBattle?.round_count || selectedItemCount),
-        timePerItem: String(activeBattle?.time_per_item || selectedTimePerItem),
-      },
-    });
+    if (activeBattle?.id) {
+      await supabase
+        .from('battles')
+        .update({ status: 'active', started_at: new Date().toISOString() })
+        .eq('id', activeBattle.id);
+    }
   };
 
-  const handleJoinCreatorBattle = () => {
+  const handleJoinCreatorBattle = async () => {
     if (!creatorBattleReady) {
       Alert.alert('No active battle', 'The creator has not launched a battle yet.');
       return;
     }
 
-    router.push({
-      pathname: '/battle/[id]',
-      params: {
-        id: roomId || 'room',
-        roomName: roomRecord?.name || roomName || 'Study Room',
-        roomTopic: roomRecord?.topic || roomTopic || 'General Knowledge',
-        battleId: activeBattle?.id || '',
-        quizId: activeBattle?.quiz_id || '',
-        rounds: String(activeBattle?.round_count || 5),
-        timePerItem: String(activeBattle?.time_per_item || 20),
-      },
-    });
+    hydrateSessionForBattle(activeBattle);
+    await joinLobby();
+    setShowWaitingRoom(true);
+  };
+
+  const handleToggleReady = async () => {
+    await setLocalReady(!localIsReady);
   };
 
   const handleRemoveMember = (member) => {
@@ -611,11 +723,19 @@ export default function RoomChatScreen() {
 
       {isCreator ? (
         <Pressable
-          onPress={() => setShowBattleConfig(true)}
+          onPress={() => {
+            if (creatorBattleReady) {
+              hydrateSessionForBattle(activeBattle);
+              setShowWaitingRoom(true);
+              return;
+            }
+
+            setShowBattleConfig(true);
+          }}
           style={({ pressed }) => [styles.battleFab, pressed && styles.battleFabPressed]}
         >
           <Ionicons name="flash" size={18} color={Colors.white} />
-          <Text style={styles.battleFabText}>Quiz Battle</Text>
+          <Text style={styles.battleFabText}>{creatorBattleReady ? 'Battle Lobby' : 'Quiz Battle'}</Text>
         </Pressable>
       ) : creatorBattleReady ? (
         <Pressable
@@ -810,42 +930,60 @@ export default function RoomChatScreen() {
             <View style={styles.waitingIconWrap}>
               <Ionicons name="people-outline" size={28} color={Colors.primary} />
             </View>
-            <Text style={styles.waitingTitle}>Waiting for Members</Text>
+            <Text style={styles.waitingTitle}>Battle Lobby</Text>
             <Text style={styles.waitingSubtitle}>
-              Battle configured with {selectedItemCount} items from {selectedFileName || 'your file'}.
-              {isCreator ? ' Start when everyone is ready.' : ' Waiting for the creator to start the battle.'}
+              {isCreator
+                ? 'Start is enabled only when at least one member joins and all joined members are ready.'
+                : localHasJoinedLobby
+                ? 'You are in the lobby. Toggle Ready when you are set.'
+                : 'Join the battle lobby to appear in the creator queue.'}
             </Text>
 
             <View style={styles.waitingMetaRow}>
               <Text style={styles.waitingMetaText}>Room: {roomName || 'Study Room'}</Text>
-              <Text style={styles.waitingMetaText}>Items: {selectedItemCount}</Text>
+              <Text style={styles.waitingMetaText}>Items: {activeBattle?.round_count || selectedItemCount}</Text>
               <Text style={styles.waitingMetaText}>Time: {activeBattle?.time_per_item || selectedTimePerItem}s</Text>
+              <Text style={styles.waitingMetaText}>Realtime: {connectionStatus}</Text>
             </View>
 
+            {battleRealtimeError ? <Text style={styles.lobbyErrorText}>{battleRealtimeError}</Text> : null}
+
             <View style={styles.lobbyMembersCard}>
-              <Text style={styles.lobbyMembersTitle}>Lobby Members</Text>
-              {roomMembers.map((member) => {
-                const isMemberCreator = member.role === 'creator' || member.userId === roomRecord?.creator_id;
-                const initial = member.name.slice(0, 1).toUpperCase();
+              <Text style={styles.lobbyMembersTitle}>Lobby Members ({activeLobbyPlayers.length})</Text>
+              {activeLobbyPlayers.map((member) => {
+                const initial = member.displayName.slice(0, 1).toUpperCase();
 
                 return (
-                  <View key={`waiting-${member.id}`} style={styles.lobbyMemberRow}>
+                  <View key={`waiting-${member.userId}`} style={styles.lobbyMemberRow}>
                     <View style={styles.lobbyMemberLeft}>
                       <View style={styles.lobbyMemberAvatar}>
                         <Text style={styles.lobbyMemberAvatarText}>{initial}</Text>
                       </View>
                       <View>
-                        <Text style={styles.lobbyMemberName}>{member.name}</Text>
-                        <Text style={styles.lobbyMemberRole}>{isMemberCreator ? 'Creator' : 'Member'}</Text>
+                        <Text style={styles.lobbyMemberName}>{member.displayName}</Text>
+                        <Text style={styles.lobbyMemberRole}>{member.isCreator ? 'Creator' : 'Member'}</Text>
                       </View>
                     </View>
 
-                    <View style={[styles.lobbyStatusPill, isMemberCreator && styles.lobbyStatusCreator]}>
-                      <Text style={styles.lobbyStatusText}>{isMemberCreator ? 'Can Start' : 'In Lobby'}</Text>
+                    <View
+                      style={[
+                        styles.lobbyStatusPill,
+                        member.isCreator && styles.lobbyStatusCreator,
+                        !member.isCreator && member.isReady && styles.lobbyStatusReady,
+                        !member.isCreator && !member.isReady && styles.lobbyStatusWaiting,
+                      ]}
+                    >
+                      <Text style={styles.lobbyStatusText}>
+                        {member.isCreator ? 'Host' : member.isReady ? 'Ready' : 'Waiting'}
+                      </Text>
                     </View>
                   </View>
                 );
               })}
+
+              {!activeLobbyPlayers.length ? (
+                <Text style={styles.lobbyEmptyText}>No one is in the lobby yet.</Text>
+              ) : null}
             </View>
 
             <Pressable
@@ -857,18 +995,57 @@ export default function RoomChatScreen() {
 
             {isCreator ? (
               <Pressable
-                onPress={handleEnterBattleArena}
-                style={({ pressed }) => [styles.enterArenaButton, pressed && styles.enterArenaButtonPressed]}
+                onPress={handleCreatorStartBattle}
+                disabled={!canStartNow}
+                style={({ pressed }) => [
+                  styles.enterArenaButton,
+                  !canStartNow && styles.enterArenaButtonDisabled,
+                  pressed && canStartNow && styles.enterArenaButtonPressed,
+                ]}
               >
                 <Ionicons name="game-controller-outline" size={18} color={Colors.white} />
                 <Text style={styles.enterArenaText}>Start Battle</Text>
               </Pressable>
             ) : (
-              <View style={styles.waitingCreatorNotice}>
-                <Ionicons name="time-outline" size={16} color={Colors.darkGray} />
-                <Text style={styles.waitingCreatorNoticeText}>Waiting for the creator to start the battle...</Text>
-              </View>
+              <>
+                {!localHasJoinedLobby ? (
+                  <Pressable
+                    onPress={handleJoinCreatorBattle}
+                    style={({ pressed }) => [styles.enterArenaButton, pressed && styles.enterArenaButtonPressed]}
+                  >
+                    <Ionicons name="log-in-outline" size={18} color={Colors.white} />
+                    <Text style={styles.enterArenaText}>Join Battle Lobby</Text>
+                  </Pressable>
+                ) : (
+                  <Pressable
+                    onPress={handleToggleReady}
+                    style={({ pressed }) => [
+                      styles.readyButton,
+                      localIsReady && styles.readyButtonActive,
+                      pressed && styles.enterArenaButtonPressed,
+                    ]}
+                  >
+                    <Ionicons name={localIsReady ? 'checkmark-circle' : 'ellipse-outline'} size={18} color={Colors.white} />
+                    <Text style={styles.enterArenaText}>{localIsReady ? 'Ready - Tap to Unready' : 'Mark as Ready'}</Text>
+                  </Pressable>
+                )}
+
+                <View style={styles.waitingCreatorNotice}>
+                  <Ionicons name="time-outline" size={16} color={Colors.darkGray} />
+                  <Text style={styles.waitingCreatorNoticeText}>Waiting for the creator to start the battle...</Text>
+                </View>
+              </>
             )}
+
+            {isCreator && !canStartNow ? (
+              <Text style={styles.startBlockedText}>
+                {!lobbyMembers.length
+                  ? 'At least one member must join the lobby.'
+                  : waitingCount > 0
+                  ? `${waitingCount} member(s) are not ready yet.`
+                  : 'Start is currently unavailable.'}
+              </Text>
+            ) : null}
           </View>
         </Pressable>
       </Modal>
@@ -1392,6 +1569,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
+  lobbyErrorText: {
+    color: '#B94040',
+    fontSize: 12,
+    fontWeight: '600',
+    alignSelf: 'flex-start',
+    marginTop: -2,
+  },
   lobbyMembersCard: {
     width: '100%',
     borderRadius: 12,
@@ -1451,10 +1635,21 @@ const styles = StyleSheet.create({
   lobbyStatusCreator: {
     backgroundColor: '#FFF3EF',
   },
+  lobbyStatusReady: {
+    backgroundColor: '#E8F8EE',
+  },
+  lobbyStatusWaiting: {
+    backgroundColor: '#FFF6E6',
+  },
   lobbyStatusText: {
     color: Colors.textDark,
     fontSize: 11,
     fontWeight: '600',
+  },
+  lobbyEmptyText: {
+    color: Colors.darkGray,
+    fontSize: 12,
+    fontWeight: '500',
   },
   closeWaitingButton: {
     marginTop: 2,
@@ -1488,6 +1683,22 @@ const styles = StyleSheet.create({
   enterArenaButtonPressed: {
     opacity: 0.85,
   },
+  enterArenaButtonDisabled: {
+    opacity: 0.45,
+  },
+  readyButton: {
+    width: '100%',
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: '#5A6E85',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  readyButtonActive: {
+    backgroundColor: '#2E8B57',
+  },
   enterArenaText: {
     color: Colors.white,
     fontSize: 14,
@@ -1509,5 +1720,12 @@ const styles = StyleSheet.create({
     color: Colors.darkGray,
     fontSize: 12,
     fontWeight: '600',
+  },
+  startBlockedText: {
+    color: Colors.darkGray,
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginTop: 2,
   },
 });

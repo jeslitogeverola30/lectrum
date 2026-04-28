@@ -1,77 +1,41 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth, useUser } from '@clerk/expo';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
-import { ActivityIndicator, Animated, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { supabase } from '../../services/supabase.js';
+import { GAME_PHASES, useGameStore } from '../../store/gameStore.js';
 import { Colors } from '../../styles/auth/auth_styles.js';
 
 const FALLBACK_QUESTION_BANK = [
   {
     prompt: 'What is the powerhouse of the cell?',
     options: ['Ribosome', 'Mitochondrion', 'Nucleus', 'Golgi apparatus'],
-    answer: 'Mitochondrion',
   },
   {
     prompt: 'Which planet is known as the Red Planet?',
     options: ['Mars', 'Venus', 'Jupiter', 'Mercury'],
-    answer: 'Mars',
   },
   {
     prompt: 'What is the capital city of Japan?',
     options: ['Kyoto', 'Seoul', 'Tokyo', 'Osaka'],
-    answer: 'Tokyo',
-  },
-  {
-    prompt: 'Which structure carries blood away from the heart?',
-    options: ['Vein', 'Artery', 'Capillary', 'Valve'],
-    answer: 'Artery',
   },
   {
     prompt: 'Who developed the theory of relativity?',
     options: ['Newton', 'Tesla', 'Einstein', 'Curie'],
-    answer: 'Einstein',
-  },
-  {
-    prompt: 'Which gas do plants absorb from the atmosphere?',
-    options: ['Nitrogen', 'Carbon Dioxide', 'Oxygen', 'Hydrogen'],
-    answer: 'Carbon Dioxide',
-  },
-  {
-    prompt: 'What is the largest ocean on Earth?',
-    options: ['Indian', 'Arctic', 'Atlantic', 'Pacific'],
-    answer: 'Pacific',
-  },
-  {
-    prompt: 'In computing, what does CPU stand for?',
-    options: ['Central Processing Unit', 'Core Program Utility', 'Computer Power Unit', 'Central Program Upload'],
-    answer: 'Central Processing Unit',
-  },
-  {
-    prompt: 'Which ancient civilization built Machu Picchu?',
-    options: ['Mayan', 'Roman', 'Incan', 'Egyptian'],
-    answer: 'Incan',
   },
   {
     prompt: 'How many continents are there?',
     options: ['5', '6', '7', '8'],
-    answer: '7',
   },
 ];
 
-const DEFAULT_ROUND_SECONDS = 20;
-const MIN_ROUND_SECONDS = 5;
-const MAX_ROUND_SECONDS = 30;
+const clampPositiveInt = (value, fallback) => {
+  const parsed = Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
 
-function buildFallbackRounds(roundsCount) {
-  const normalizedCount = Math.max(1, Math.min(10, roundsCount));
-  return Array.from({ length: normalizedCount }, (_, index) => {
-    const question = FALLBACK_QUESTION_BANK[index % FALLBACK_QUESTION_BANK.length];
-    return { ...question, id: `round-${index + 1}` };
-  });
-}
-
-function mapQuizToRounds(rawQuizItems, roundsCount) {
+const mapQuizToRounds = (rawQuizItems, roundsCount) => {
   if (!Array.isArray(rawQuizItems)) {
     return [];
   }
@@ -85,26 +49,27 @@ function mapQuizToRounds(rawQuizItems, roundsCount) {
         ? item.options.map((option) => String(option)).filter(Boolean).slice(0, 4)
         : [];
 
-      const answerIndex = Number.isInteger(item?.answerIndex)
-        ? item.answerIndex
-        : Number.parseInt(String(item?.answerIndex ?? 0), 10);
-
       const prompt = String(item?.question ?? '').trim();
       if (!prompt || options.length < 2) {
         return null;
       }
 
-      const safeAnswerIndex = Number.isInteger(answerIndex) && answerIndex >= 0 && answerIndex < options.length ? answerIndex : 0;
-
       return {
         id: `round-${index + 1}`,
         prompt,
         options,
-        answer: options[safeAnswerIndex],
       };
     })
     .filter(Boolean);
-}
+};
+
+const buildFallbackRounds = (roundsCount) => {
+  const normalizedCount = Math.max(1, Math.min(10, roundsCount));
+  return Array.from({ length: normalizedCount }, (_, index) => ({
+    id: `fallback-${index + 1}`,
+    ...FALLBACK_QUESTION_BANK[index % FALLBACK_QUESTION_BANK.length],
+  }));
+};
 
 export default function BattleArenaScreen() {
   const { isLoaded, isSignedIn } = useAuth();
@@ -112,33 +77,49 @@ export default function BattleArenaScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
 
-  const requestedRounds = Number(Array.isArray(params.rounds) ? params.rounds[0] : params.rounds || 5);
-  const requestedTimePerItem = Number(
-    Array.isArray(params.timePerItem) ? params.timePerItem[0] : params.timePerItem || DEFAULT_ROUND_SECONDS
-  );
-  const roundSeconds = Math.max(MIN_ROUND_SECONDS, Math.min(MAX_ROUND_SECONDS, requestedTimePerItem));
+  const roomId = Array.isArray(params.id) ? params.id[0] : params.id;
   const roomName = Array.isArray(params.roomName) ? params.roomName[0] : params.roomName;
   const roomTopic = Array.isArray(params.roomTopic) ? params.roomTopic[0] : params.roomTopic;
+  const battleId = Array.isArray(params.battleId) ? params.battleId[0] : params.battleId;
+  const creatorId = Array.isArray(params.creatorId) ? params.creatorId[0] : params.creatorId;
   const quizId = Array.isArray(params.quizId) ? params.quizId[0] : params.quizId;
+  const requestedRounds = clampPositiveInt(Array.isArray(params.rounds) ? params.rounds[0] : params.rounds, 5);
+  const requestedTimePerItem = clampPositiveInt(
+    Array.isArray(params.timePerItem) ? params.timePerItem[0] : params.timePerItem,
+    20
+  );
 
   const [rounds, setRounds] = useState(() => buildFallbackRounds(requestedRounds));
-  const [resolvedTopic, setResolvedTopic] = useState(roomTopic || 'General Knowledge');
   const [isLoadingQuiz, setIsLoadingQuiz] = useState(Boolean(quizId));
   const [quizError, setQuizError] = useState('');
-  const [currentRoundIndex, setCurrentRoundIndex] = useState(0);
-  const [roundTimer, setRoundTimer] = useState(roundSeconds);
-  const [selectedOption, setSelectedOption] = useState(null);
-  const [score, setScore] = useState(0);
-  const [streak, setStreak] = useState(0);
-  const [correctCount, setCorrectCount] = useState(0);
-  const [eloDelta, setEloDelta] = useState(0);
-  const [showSummary, setShowSummary] = useState(false);
-  const pulseOpacity = useRef(new Animated.Value(0)).current;
+  const [selectedOptionIndex, setSelectedOptionIndex] = useState(null);
+  const [remainingSeconds, setRemainingSeconds] = useState(requestedTimePerItem);
 
-  const baseElo = Number(user?.unsafeMetadata?.eloRating ?? 1240);
-  const liveElo = baseElo + eloDelta;
-  const currentRound = rounds[currentRoundIndex];
-  const isUrgent = roundTimer <= 5 && !showSummary;
+  const phase = useGameStore((state) => state.phase);
+  const roundIndex = useGameStore((state) => state.roundIndex);
+  const localIsCreator = useGameStore((state) => state.isCreatorClient);
+  const localHasSubmittedCurrentRound = useGameStore((state) => state.hasLocalSubmittedCurrentRound());
+  const hydrateBattleSession = useGameStore((state) => state.hydrateBattleSession);
+  const submitAnswer = useGameStore((state) => state.submitAnswer);
+  const getRemainingSeconds = useGameStore((state) => state.getRemainingSeconds);
+  const getSubmittedCountForCurrentRound = useGameStore((state) => state.getSubmittedCountForCurrentRound);
+  const getAllActivePlayers = useGameStore((state) => state.getAllActivePlayers);
+  const markBattleCompletedInDb = useGameStore((state) => state.markBattleCompletedInDb);
+  const teardownSession = useGameStore((state) => state.teardownSession);
+
+  const hasMarkedCompleted = useRef(false);
+
+  const submittedCount = getSubmittedCountForCurrentRound();
+  const activePlayerCount = getAllActivePlayers().length;
+
+  const currentRound = useMemo(() => {
+    if (!rounds.length) {
+      return null;
+    }
+
+    const safeIndex = Math.max(0, Math.min(roundIndex, rounds.length - 1));
+    return rounds[safeIndex];
+  }, [roundIndex, rounds]);
 
   useEffect(() => {
     let isActive = true;
@@ -147,7 +128,6 @@ export default function BattleArenaScreen() {
       if (!quizId) {
         if (isActive) {
           setRounds(buildFallbackRounds(requestedRounds));
-          setResolvedTopic(roomTopic || 'General Knowledge');
           setIsLoadingQuiz(false);
           setQuizError('');
         }
@@ -159,7 +139,7 @@ export default function BattleArenaScreen() {
 
       const { data, error } = await supabase
         .from('quizzes')
-        .select('topic, raw_json_content')
+        .select('raw_json_content')
         .eq('id', quizId)
         .maybeSingle();
 
@@ -168,22 +148,20 @@ export default function BattleArenaScreen() {
       }
 
       if (error || !data) {
-        setQuizError(error?.message || 'Quiz data not found. Using fallback questions.');
         setRounds(buildFallbackRounds(requestedRounds));
-        setResolvedTopic(roomTopic || 'General Knowledge');
+        setQuizError(error?.message || 'Could not load quiz. Using fallback questions.');
         setIsLoadingQuiz(false);
         return;
       }
 
       const mappedRounds = mapQuizToRounds(data.raw_json_content, requestedRounds);
       if (!mappedRounds.length) {
-        setQuizError('Quiz content is invalid. Using fallback questions.');
         setRounds(buildFallbackRounds(requestedRounds));
+        setQuizError('Quiz content is invalid. Using fallback questions.');
       } else {
         setRounds(mappedRounds);
       }
 
-      setResolvedTopic(data.topic || roomTopic || 'General Knowledge');
       setIsLoadingQuiz(false);
     };
 
@@ -192,66 +170,85 @@ export default function BattleArenaScreen() {
     return () => {
       isActive = false;
     };
-  }, [quizId, requestedRounds, roomTopic]);
+  }, [quizId, requestedRounds]);
 
   useEffect(() => {
-    setCurrentRoundIndex(0);
-    setRoundTimer(roundSeconds);
-    setSelectedOption(null);
-    setScore(0);
-    setStreak(0);
-    setCorrectCount(0);
-    setEloDelta(0);
-    setShowSummary(false);
-  }, [rounds, roundSeconds]);
-
-  useEffect(() => {
-    if (!isUrgent) {
-      pulseOpacity.stopAnimation();
-      pulseOpacity.setValue(0);
-      return undefined;
+    if (!roomId || !battleId || !user?.id) {
+      return;
     }
 
-    const pulseLoop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseOpacity, {
-          toValue: 1,
-          duration: 650,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulseOpacity, {
-          toValue: 0,
-          duration: 650,
-          useNativeDriver: true,
-        }),
-      ])
-    );
+    hydrateBattleSession({
+      roomId,
+      battleId,
+      creatorId: creatorId || null,
+      currentUserId: user.id,
+      currentUserName: user?.username || user?.fullName || user?.primaryEmailAddress?.emailAddress || 'Member',
+      isCreatorClient: Boolean(creatorId && user.id === creatorId),
+      questionCount: rounds.length || requestedRounds,
+      roundDurationSec: requestedTimePerItem,
+    });
+  }, [
+    battleId,
+    creatorId,
+    hydrateBattleSession,
+    requestedRounds,
+    requestedTimePerItem,
+    roomId,
+    rounds.length,
+    user?.fullName,
+    user?.id,
+    user?.primaryEmailAddress?.emailAddress,
+    user?.username,
+  ]);
 
-    pulseLoop.start();
+  useEffect(() => {
+    const timerId = setInterval(() => {
+      setRemainingSeconds(getRemainingSeconds());
+    }, 300);
 
+    return () => clearInterval(timerId);
+  }, [getRemainingSeconds]);
+
+  useEffect(() => {
+    setSelectedOptionIndex(null);
+  }, [roundIndex]);
+
+  useEffect(() => {
+    if (phase !== GAME_PHASES.ROUND || localHasSubmittedCurrentRound || remainingSeconds > 0) {
+      return;
+    }
+
+    submitAnswer({ selectedOptionIndex: null, isTimeout: true });
+  }, [localHasSubmittedCurrentRound, phase, remainingSeconds, submitAnswer]);
+
+  useEffect(() => {
+    if (phase !== GAME_PHASES.GAME_OVER || hasMarkedCompleted.current || !localIsCreator) {
+      return;
+    }
+
+    hasMarkedCompleted.current = true;
+    markBattleCompletedInDb();
+  }, [localIsCreator, markBattleCompletedInDb, phase]);
+
+  useEffect(() => {
     return () => {
-      pulseLoop.stop();
-      pulseOpacity.stopAnimation();
-      pulseOpacity.setValue(0);
+      teardownSession();
     };
-  }, [isUrgent, pulseOpacity]);
+  }, [teardownSession]);
 
-  useEffect(() => {
-    if (showSummary) {
-      return undefined;
+  const handleAnswer = async (optionIndex) => {
+    if (phase !== GAME_PHASES.ROUND || localHasSubmittedCurrentRound) {
+      return;
     }
 
-    if (roundTimer <= 0) {
-      handleAnswer(null, true);
-      return undefined;
-    }
+    setSelectedOptionIndex(optionIndex);
+    await submitAnswer({ selectedOptionIndex: optionIndex, isTimeout: false });
+  };
 
-    const tick = setTimeout(() => {
-      setRoundTimer((prev) => prev - 1);
-    }, 1000);
-
-    return () => clearTimeout(tick);
-  }, [roundTimer, showSummary]);
+  const handleBackToRoom = async () => {
+    await teardownSession();
+    router.back();
+  };
 
   if (!isLoaded) {
     return null;
@@ -261,105 +258,29 @@ export default function BattleArenaScreen() {
     return <Redirect href="/auth/sign_in" />;
   }
 
-  if (isLoadingQuiz) {
+  if (isLoadingQuiz || !currentRound) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.loadingWrap}>
           <ActivityIndicator size="large" color={Colors.primary} />
-          <Text style={styles.loadingText}>Preparing battle quiz from your uploaded source...</Text>
+          <Text style={styles.loadingText}>Preparing synchronized battle arena...</Text>
         </View>
       </SafeAreaView>
     );
   }
 
-  const goToNextRound = () => {
-    if (currentRoundIndex + 1 >= rounds.length) {
-      setShowSummary(true);
-      return;
-    }
-
-    setCurrentRoundIndex((prev) => prev + 1);
-    setRoundTimer(roundSeconds);
-    setSelectedOption(null);
-  };
-
-  const handleAnswer = (option, timeout = false) => {
-    if (selectedOption !== null || showSummary) {
-      return;
-    }
-
-    const chosenOption = timeout ? '__timeout__' : option;
-    setSelectedOption(chosenOption);
-
-    const isCorrect = !timeout && option === currentRound.answer;
-
-    if (isCorrect) {
-      const nextStreak = streak + 1;
-      const streakBonus = nextStreak >= 2 ? (nextStreak - 1) * 2 : 0;
-      const roundPoints = 10 + streakBonus;
-      const roundElo = 8 + streakBonus;
-
-      setStreak(nextStreak);
-      setCorrectCount((prev) => prev + 1);
-      setScore((prev) => prev + roundPoints);
-      setEloDelta((prev) => prev + roundElo);
-    } else {
-      setStreak(0);
-      setEloDelta((prev) => prev - 3);
-    }
-
-    setTimeout(goToNextRound, 900);
-  };
-
-  const getOptionStateStyle = (option) => {
-    if (selectedOption === null) {
-      return styles.optionIdle;
-    }
-
-    if (option === currentRound.answer) {
-      return styles.optionCorrect;
-    }
-
-    if (option === selectedOption && option !== currentRound.answer) {
-      return styles.optionWrong;
-    }
-
-    return styles.optionDisabled;
-  };
-
-  if (showSummary) {
+  if (phase === GAME_PHASES.GAME_OVER) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Battle Summary</Text>
-        </View>
-
         <View style={styles.summaryCard}>
-          <Text style={styles.summaryRoom}>{roomName || 'Battle Arena'}</Text>
-          <Text style={styles.summaryTopic}>{resolvedTopic || 'General Knowledge'}</Text>
+          <Text style={styles.summaryTitle}>Battle Finished</Text>
+          <Text style={styles.summarySubtitle}>
+            All players received GAME_OVER at the same time. The room battle state has been reset.
+          </Text>
+          <Text style={styles.summaryMeta}>Room: {roomName || 'Study Room'}</Text>
+          <Text style={styles.summaryMeta}>Topic: {roomTopic || 'General Knowledge'}</Text>
 
-          <View style={styles.summaryGrid}>
-            <View style={styles.summaryMetric}>
-              <Text style={styles.summaryValue}>{score}</Text>
-              <Text style={styles.summaryLabel}>Score</Text>
-            </View>
-            <View style={styles.summaryMetric}>
-              <Text style={styles.summaryValue}>{correctCount}/{rounds.length}</Text>
-              <Text style={styles.summaryLabel}>Correct</Text>
-            </View>
-            <View style={styles.summaryMetric}>
-              <Text style={[styles.summaryValue, eloDelta >= 0 ? styles.eloUp : styles.eloDown]}>
-                {eloDelta >= 0 ? '+' : ''}{eloDelta}
-              </Text>
-              <Text style={styles.summaryLabel}>ELO Change</Text>
-            </View>
-          </View>
-
-          <View style={styles.summaryEloRow}>
-            <Text style={styles.summaryEloText}>ELO: {baseElo} → {liveElo}</Text>
-          </View>
-
-          <Pressable onPress={() => router.back()} style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryButtonPressed]}>
+          <Pressable onPress={handleBackToRoom} style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryButtonPressed]}>
             <Text style={styles.primaryButtonText}>Back To Room</Text>
           </Pressable>
         </View>
@@ -369,59 +290,45 @@ export default function BattleArenaScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      {isUrgent ? (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.urgentOverlay,
-            {
-              opacity: pulseOpacity.interpolate({
-                inputRange: [0, 1],
-                outputRange: [0.15, 0.85],
-              }),
-            },
-          ]}
-        />
-      ) : null}
-
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}>
+        <Pressable onPress={handleBackToRoom} style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}>
           <Ionicons name="chevron-back" size={20} color={Colors.textDark} />
         </Pressable>
-        <Text style={styles.headerTitle}>Battle Arena</Text>
+        <Text style={styles.headerTitle}>Game Arena</Text>
         <View style={styles.headerPlaceholder} />
       </View>
 
-      <View style={styles.statsRow}>
-        <View style={styles.statPill}>
-          <Text style={styles.statLabel}>Round</Text>
-          <Text style={styles.statValue}>{currentRoundIndex + 1}/{rounds.length}</Text>
+      <View style={styles.metricsRow}>
+        <View style={styles.metricCard}>
+          <Text style={styles.metricLabel}>Round</Text>
+          <Text style={styles.metricValue}>{Math.min(roundIndex + 1, rounds.length)}/{rounds.length}</Text>
         </View>
-        <View style={styles.statPill}>
-          <Text style={styles.statLabel}>Timer</Text>
-          <Text style={[styles.statValue, roundTimer <= 5 && styles.timerWarning]}>{roundTimer}s</Text>
+        <View style={styles.metricCard}>
+          <Text style={styles.metricLabel}>Timer</Text>
+          <Text style={[styles.metricValue, remainingSeconds <= 5 && styles.metricValueDanger]}>{remainingSeconds}s</Text>
         </View>
-        <View style={styles.statPill}>
-          <Text style={styles.statLabel}>Streak</Text>
-          <Text style={styles.statValue}>x{streak}</Text>
-        </View>
-        <View style={styles.statPill}>
-          <Text style={styles.statLabel}>ELO</Text>
-          <Text style={styles.statValue}>{liveElo}</Text>
+        <View style={styles.metricCard}>
+          <Text style={styles.metricLabel}>Submitted</Text>
+          <Text style={styles.metricValue}>{submittedCount}/{activePlayerCount}</Text>
         </View>
       </View>
 
       <View style={styles.questionCard}>
-        <Text style={styles.questionTopic}>{resolvedTopic || 'General Knowledge'}</Text>
+        <Text style={styles.questionTopic}>{roomTopic || 'General Knowledge'}</Text>
         <Text style={styles.questionText}>{currentRound.prompt}</Text>
 
-        <View style={styles.optionsList}>
-          {currentRound.options.map((option) => (
+        <View style={styles.optionsWrap}>
+          {currentRound.options.map((option, index) => (
             <Pressable
-              key={option}
-              onPress={() => handleAnswer(option)}
-              disabled={selectedOption !== null}
-              style={({ pressed }) => [styles.optionButton, getOptionStateStyle(option), pressed && selectedOption === null && styles.optionPressed]}
+              key={`${currentRound.id}-${option}`}
+              onPress={() => handleAnswer(index)}
+              disabled={localHasSubmittedCurrentRound || phase !== GAME_PHASES.ROUND}
+              style={({ pressed }) => [
+                styles.optionButton,
+                selectedOptionIndex === index && styles.optionButtonSelected,
+                localHasSubmittedCurrentRound && styles.optionButtonLocked,
+                pressed && !localHasSubmittedCurrentRound && styles.optionButtonPressed,
+              ]}
             >
               <Text style={styles.optionText}>{option}</Text>
             </Pressable>
@@ -429,10 +336,14 @@ export default function BattleArenaScreen() {
         </View>
       </View>
 
-      <View style={styles.footerRow}>
-        <Text style={styles.footerScore}>{quizError ? 'Fallback Mode · ' : ''}Score: {score}</Text>
-        <Text style={styles.footerBonus}>Streak bonus: +{streak >= 2 ? (streak - 1) * 2 : 0}</Text>
+      <View style={styles.footerNotice}>
+        <Ionicons name="sync-outline" size={16} color={Colors.darkGray} />
+        <Text style={styles.footerNoticeText}>
+          Next round advances when all players submit or when timer reaches zero.
+        </Text>
       </View>
+
+      {quizError ? <Text style={styles.quizErrorText}>{quizError}</Text> : null}
     </SafeAreaView>
   );
 }
@@ -446,23 +357,12 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 12,
-    paddingHorizontal: 20,
+    gap: 10,
   },
   loadingText: {
     color: Colors.darkGray,
     fontSize: 13,
-    textAlign: 'center',
-  },
-  urgentOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    borderWidth: 5,
-    borderColor: 'rgba(208, 52, 52, 0.95)',
-    shadowColor: '#D03434',
-    shadowOpacity: 0.75,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 12,
+    fontWeight: '600',
   },
   header: {
     paddingHorizontal: 12,
@@ -495,53 +395,53 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
   },
-  statsRow: {
+  metricsRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: 8,
     paddingHorizontal: 12,
     paddingTop: 12,
   },
-  statPill: {
+  metricCard: {
     flex: 1,
-    minWidth: '22%',
-    backgroundColor: '#FFFFFF',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(26,26,26,0.05)',
-    paddingVertical: 9,
-    paddingHorizontal: 10,
+    borderColor: 'rgba(26,26,26,0.06)',
+    backgroundColor: '#FFFFFF',
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
   },
-  statLabel: {
+  metricLabel: {
     color: Colors.darkGray,
     fontSize: 11,
     fontWeight: '600',
   },
-  statValue: {
+  metricValue: {
     color: Colors.textDark,
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '800',
-    marginTop: 1,
+    marginTop: 2,
   },
-  timerWarning: {
-    color: '#B94040',
+  metricValueDanger: {
+    color: '#C24747',
   },
   questionCard: {
-    marginTop: 12,
-    marginHorizontal: 12,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
+    margin: 12,
+    marginTop: 14,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(26,26,26,0.05)',
-    padding: 14,
-    gap: 12,
-    flex: 1,
+    borderColor: 'rgba(26,26,26,0.06)',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    gap: 10,
   },
   questionTopic: {
     color: Colors.darkGray,
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
   questionText: {
     color: Colors.textDark,
@@ -549,125 +449,90 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     lineHeight: 24,
   },
-  optionsList: {
-    gap: 9,
+  optionsWrap: {
+    gap: 8,
   },
   optionButton: {
-    borderRadius: 14,
+    borderRadius: 12,
     borderWidth: 1,
+    borderColor: 'rgba(26,26,26,0.08)',
+    backgroundColor: '#F8FAFC',
     paddingHorizontal: 12,
     paddingVertical: 12,
   },
-  optionIdle: {
-    backgroundColor: '#FAFBFD',
-    borderColor: 'rgba(26,26,26,0.08)',
+  optionButtonPressed: {
+    opacity: 0.88,
   },
-  optionCorrect: {
-    backgroundColor: '#EAF9EF',
-    borderColor: '#9CD6AE',
+  optionButtonSelected: {
+    borderColor: `${Colors.primary}70`,
+    backgroundColor: '#EEF6FF',
   },
-  optionWrong: {
-    backgroundColor: '#FFF1F1',
-    borderColor: '#E9B4B4',
-  },
-  optionDisabled: {
-    backgroundColor: '#F5F7FA',
-    borderColor: 'rgba(26,26,26,0.06)',
-    opacity: 0.8,
-  },
-  optionPressed: {
-    opacity: 0.85,
+  optionButtonLocked: {
+    opacity: 0.75,
   },
   optionText: {
     color: Colors.textDark,
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '600',
   },
-  footerRow: {
-    paddingHorizontal: 14,
+  footerNotice: {
+    marginHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(26,26,26,0.08)',
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 12,
     paddingVertical: 10,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(26,26,26,0.04)',
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
   },
-  footerScore: {
-    color: Colors.textDark,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  footerBonus: {
+  footerNoticeText: {
     color: Colors.darkGray,
+    fontSize: 12,
+    fontWeight: '600',
+    flex: 1,
+    lineHeight: 16,
+  },
+  quizErrorText: {
+    marginTop: 10,
+    marginHorizontal: 12,
+    color: '#B94040',
     fontSize: 12,
     fontWeight: '600',
   },
   summaryCard: {
-    margin: 12,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(26,26,26,0.05)',
-    backgroundColor: '#FFFFFF',
-    padding: 14,
-    gap: 12,
-  },
-  summaryRoom: {
-    color: Colors.textDark,
-    fontSize: 18,
-    fontWeight: '800',
-  },
-  summaryTopic: {
-    color: Colors.darkGray,
-    fontSize: 13,
-  },
-  summaryGrid: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  summaryMetric: {
-    flex: 1,
-    borderRadius: 12,
+    margin: 14,
+    marginTop: 26,
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: 'rgba(26,26,26,0.06)',
-    backgroundColor: '#FAFBFD',
-    alignItems: 'center',
-    paddingVertical: 10,
-    gap: 2,
+    backgroundColor: '#FFFFFF',
+    padding: 16,
+    gap: 8,
   },
-  summaryValue: {
+  summaryTitle: {
     color: Colors.textDark,
-    fontSize: 18,
+    fontSize: 22,
     fontWeight: '800',
   },
-  summaryLabel: {
+  summarySubtitle: {
     color: Colors.darkGray,
-    fontSize: 11,
-    fontWeight: '600',
+    fontSize: 13,
+    lineHeight: 18,
   },
-  eloUp: {
-    color: '#1F9D55',
-  },
-  eloDown: {
-    color: '#B94040',
-  },
-  summaryEloRow: {
-    borderRadius: 12,
-    backgroundColor: '#EEF6FF',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-  },
-  summaryEloText: {
+  summaryMeta: {
     color: Colors.textDark,
     fontSize: 13,
-    fontWeight: '700',
-    textAlign: 'center',
+    fontWeight: '600',
   },
   primaryButton: {
-    marginTop: 2,
-    height: 48,
+    marginTop: 12,
+    height: 46,
     borderRadius: 12,
-    backgroundColor: Colors.textDark,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: Colors.textDark,
   },
   primaryButtonPressed: {
     opacity: 0.85,
