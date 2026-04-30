@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Ionicons } from '@expo/vector-icons';
+import { Animated, Ionicons } from '@expo/vector-icons';
 import { useAuth, useUser } from '@clerk/expo';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
-import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Animated, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { supabase } from '../../services/supabase.js';
 import { BROADCAST_EVENTS, GAME_PHASES, useGameStore } from '../../store/gameStore.js';
 import { Colors } from '../../styles/tabs/history_styles.js';
@@ -115,6 +115,35 @@ export default function BattleArenaScreen() {
   const teardownSession = useGameStore((state) => state.teardownSession);
 
   const hasMarkedCompleted = useRef(false);
+  const cardFadeAnim = useRef(new Animated.Value(0)).current;
+  const timerPulseAnim = useRef(new Animated.Value(1)).current;
+
+  // Fade in card animation
+  useEffect(() => {
+    Animated.timing(cardFadeAnim, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+  }, [cardFadeAnim]);
+
+  // Pulse timer when low
+  useEffect(() => {
+    if (remainingSeconds <= 5 && remainingSeconds > 0) {
+      Animated.sequence([
+        Animated.timing(timerPulseAnim, {
+          toValue: 1.2,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+        Animated.timing(timerPulseAnim, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    }
+  }, [remainingSeconds, timerPulseAnim]);
 
   const submittedCount = getSubmittedCountForCurrentRound();
   const activePlayerCount = getAllActivePlayers().length;
@@ -412,7 +441,9 @@ export default function BattleArenaScreen() {
           </View>
           <View style={styles.metricCard}>
             <Text style={styles.metricLabel}>Timer</Text>
-            <Text style={[styles.metricValue, remainingSeconds <= 5 && styles.metricValueDanger]}>{remainingSeconds}s</Text>
+            <Animated.View style={{ transform: [{ scale: remainingSeconds <= 5 ? timerPulseAnim : 1 }] }}>
+              <Text style={[styles.metricValue, remainingSeconds <= 5 && styles.metricValueDanger]}>{remainingSeconds}s</Text>
+            </Animated.View>
           </View>
           <View style={styles.metricCard}>
             <Text style={styles.metricLabel}>Submitted</Text>
@@ -420,7 +451,7 @@ export default function BattleArenaScreen() {
           </View>
         </View>
 
-        <View style={styles.questionCard}>
+        <Animated.View style={[styles.questionCard, { opacity: cardFadeAnim }]}>
           <Text style={styles.questionTopic}>{roomTopic || 'General Knowledge'}</Text>
           <Text style={styles.questionText}>{currentRound.prompt}</Text>
 
@@ -581,6 +612,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(26,26,26,0.04)',
     backgroundColor: '#FAFBFD',
+    +    shadowColor: '#000',
+    +    shadowOpacity: 0.01,
+    +    shadowRadius: 4,
+    +    shadowOffset: { width: 0, height: 1 },
+    +    elevation: 0.5,
     paddingHorizontal: 12,
     paddingVertical: 12,
   },
@@ -590,6 +626,12 @@ const styles = StyleSheet.create({
   optionButtonSelected: {
     borderColor: `${Colors.primary}70`,
     backgroundColor: '#EEF6FF',
+  +    shadowColor: Colors.primary,
+  +    shadowOpacity: 0.1,
+  +    shadowRadius: 8,
+  +    shadowOffset: { width: 0, height: 2 },
+  +    elevation: 2,
+  +    justifyContent: 'center',
   },
   optionButtonLocked: {
     opacity: 0.75,
