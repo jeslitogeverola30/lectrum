@@ -105,6 +105,10 @@ export default function BattleArenaScreen() {
   const getSubmittedCountForCurrentRound = useGameStore((state) => state.getSubmittedCountForCurrentRound);
   const getAllActivePlayers = useGameStore((state) => state.getAllActivePlayers);
   const markBattleCompletedInDb = useGameStore((state) => state.markBattleCompletedInDb);
+  const finalizeMatchToDatabase = useGameStore((state) => state.finalizeMatchToDatabase);
+  const playerNewElo = useGameStore((state) => state.playerNewElo);
+  const playerEloChange = useGameStore((state) => state.playerEloChange);
+  const playerOutcome = useGameStore((state) => state.playerOutcome);
   const teardownSession = useGameStore((state) => state.teardownSession);
 
   const hasMarkedCompleted = useRef(false);
@@ -230,6 +234,27 @@ export default function BattleArenaScreen() {
     markBattleCompletedInDb();
   }, [localIsCreator, markBattleCompletedInDb, phase]);
 
+  /**
+   * CAPSTONE INTEGRATION: ELO Rating Finalization
+   * 
+   * Triggered when game transitions to GAME_OVER state.
+   * Only the host/creator executes the database transaction to ensure
+   * atomicity and prevent race conditions. Other clients receive the
+   * calculated ELO values via real-time updates.
+   */
+  useEffect(() => {
+    if (phase !== GAME_PHASES.GAME_OVER || !localIsCreator) {
+      return;
+    }
+
+    // Delay execution slightly to allow scoresByUserId to populate
+    const timer = setTimeout(() => {
+      finalizeMatchToDatabase();
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [phase, localIsCreator, finalizeMatchToDatabase]);
+
   useEffect(() => {
     return () => {
       teardownSession();
@@ -270,17 +295,72 @@ export default function BattleArenaScreen() {
   }
 
   if (phase === GAME_PHASES.GAME_OVER) {
+    // Determine outcome display text
+    const outcomeText =
+      playerOutcome === 1
+        ? '🎉 Victory!'
+        : playerOutcome === 0.5
+          ? '🤝 Draw'
+          : '❌ Defeat';
+
+    const outcomeColor =
+      playerOutcome === 1
+        ? '#4CAF50' // Green for win
+        : playerOutcome === 0.5
+          ? '#FF9800' // Orange for tie
+          : '#C24747'; // Red for loss
+
+    const eloChangeDisplay =
+      playerEloChange > 0
+        ? `+${playerEloChange}`
+        : playerEloChange < 0
+          ? `${playerEloChange}`
+          : '0';
+
     return (
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.summaryCard}>
           <Text style={styles.summaryTitle}>Battle Finished</Text>
+
+          {/* ELO RATING DISPLAY */}
+          {playerNewElo !== null && (
+            <View style={styles.eloResultsContainer}>
+              {/* Outcome Indicator */}
+              <View style={styles.outcomeRow}>
+                <Text style={[styles.outcomeText, { color: outcomeColor }]}>{outcomeText}</Text>
+              </View>
+
+              {/* ELO Rating Card */}
+              <View style={[styles.eloCard, { borderColor: outcomeColor }]}>
+                <View style={styles.eloRow}>
+                  <View style={styles.eloColumn}>
+                    <Text style={styles.eloLabel}>New Rating</Text>
+                    <Text style={styles.eloRating}>{playerNewElo}</Text>
+                  </View>
+                  <View style={styles.eloColumn}>
+                    <Text style={styles.eloLabel}>Change</Text>
+                    <Text style={[styles.eloChange, { color: playerEloChange > 0 ? '#4CAF50' : playerEloChange < 0 ? '#C24747' : Colors.darkGray }]}>
+                      {eloChangeDisplay}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Explanation */}
+              <Text style={styles.eloExplanation}>Your rating was calculated using the Elo formula and tournament results.</Text>
+            </View>
+          )}
+
           <Text style={styles.summarySubtitle}>
             All players received GAME_OVER at the same time. The room battle state has been reset.
           </Text>
           <Text style={styles.summaryMeta}>Room: {roomName || 'Study Room'}</Text>
           <Text style={styles.summaryMeta}>Topic: {roomTopic || 'General Knowledge'}</Text>
 
-          <Pressable onPress={handleBackToRoom} style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryButtonPressed]}>
+          <Pressable
+            onPress={handleBackToRoom}
+            style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryButtonPressed]}
+          >
             <Text style={styles.primaryButtonText}>Back To Room</Text>
           </Pressable>
         </View>
@@ -525,6 +605,60 @@ const styles = StyleSheet.create({
     color: Colors.textDark,
     fontSize: 13,
     fontWeight: '600',
+  },
+  eloResultsContainer: {
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: 'rgba(26,26,26,0.06)',
+    paddingVertical: 12,
+    marginVertical: 10,
+    gap: 8,
+  },
+  outcomeRow: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  outcomeText: {
+    fontSize: 28,
+    fontWeight: '800',
+  },
+  eloCard: {
+    borderRadius: 12,
+    borderWidth: 2,
+    backgroundColor: 'rgba(26,26,26,0.02)',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  eloRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+  },
+  eloColumn: {
+    alignItems: 'center',
+    gap: 4,
+  },
+  eloLabel: {
+    color: Colors.darkGray,
+    fontSize: 11,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  eloRating: {
+    color: Colors.textDark,
+    fontSize: 26,
+    fontWeight: '800',
+  },
+  eloChange: {
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  eloExplanation: {
+    color: Colors.darkGray,
+    fontSize: 12,
+    fontWeight: '500',
+    lineHeight: 16,
+    textAlign: 'center',
   },
   primaryButton: {
     marginTop: 12,

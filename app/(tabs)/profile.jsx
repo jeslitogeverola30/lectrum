@@ -14,15 +14,8 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { supabase } from '../../services/supabase.js';
 import { Colors } from '../../styles/auth/auth_styles.js';
-
-const getRankBadge = (elo) => {
-  if (elo >= 1800) return { label: 'Diamond', color: Colors.primary };
-  if (elo >= 1600) return { label: 'Platinum', color: Colors.gold };
-  if (elo >= 1400) return { label: 'Gold', color: Colors.accent };
-  if (elo >= 1200) return { label: 'Silver', color: Colors.darkGray };
-  return { label: 'Bronze', color: '#B87333' };
-};
 
 export default function ProfileTabScreen() {
   const { signOut } = useClerk();
@@ -32,6 +25,38 @@ export default function ProfileTabScreen() {
   const [musicEnabled, setMusicEnabled] = useState(true);
   const [pushNotificationsEnabled, setPushNotificationsEnabled] = useState(true);
   const [isSavingPreferences, setIsSavingPreferences] = useState(false);
+  const [userProfile, setUserProfile] = useState(null);
+  const [isLoadingProfile, setIsLoadingProfile] = useState(true);
+
+  // ===== FETCH USER PROFILE FROM DATABASE =====
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn || !user?.id) {
+      return;
+    }
+
+    const fetchUserProfile = async () => {
+      try {
+        setIsLoadingProfile(true);
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('id, username, avatar_emoji, elo_rating, total_matches, wins, losses')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        if (error) {
+          console.error('Error fetching profile:', error);
+        } else {
+          setUserProfile(data);
+        }
+      } catch (err) {
+        console.error('Unexpected error fetching profile:', err);
+      } finally {
+        setIsLoadingProfile(false);
+      }
+    };
+
+    fetchUserProfile();
+  }, [isLoaded, isSignedIn, user?.id]);
 
   useEffect(() => {
     if (!user) {
@@ -112,8 +137,8 @@ export default function ProfileTabScreen() {
 
   const displayName = user?.username || user?.fullName || user?.primaryEmailAddress?.emailAddress || 'Commander';
   const emailAddress = user?.primaryEmailAddress?.emailAddress || 'No email connected';
-  const eloRating = Number(user?.unsafeMetadata?.eloRating ?? 1240);
-  const rankBadge = getRankBadge(eloRating);
+  const eloRating = userProfile?.elo_rating || 1200;
+  const totalMatches = userProfile?.total_matches || 0;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -122,46 +147,49 @@ export default function ProfileTabScreen() {
       </View>
 
       <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      <View style={styles.profileCard}>
-        <View style={styles.profileTopRow}>
-          <View style={styles.avatar}>
+        <View style={styles.profileCard}>
+          <View style={styles.profileTopRow}>
+            <View style={styles.avatar}>
               {user?.imageUrl ? (
                 <Image source={{ uri: user.imageUrl }} style={styles.avatarImage} />
               ) : (
                 <Ionicons name="person" size={30} color={Colors.white} />
               )}
+            </View>
+
+            <View style={styles.profileMeta}>
+              <Text style={styles.displayName}>{displayName}</Text>
+              <Text style={styles.emailText}>{emailAddress}</Text>
+            </View>
           </View>
 
-          <View style={styles.profileMeta}>
-            <Text style={styles.displayName}>{displayName}</Text>
-            <Text style={styles.emailText}>{emailAddress}</Text>
+          <View style={styles.profileBadgesRow}>
+            <View style={styles.statusPill}>
+              <View style={styles.statusDot} />
+              <Text style={styles.statusText}>Active</Text>
+            </View>
+          </View>
+
+          <View style={styles.metricsRow}>
+            <View style={styles.metricBox}>
+              <Text style={styles.metricLabel}>Current ELO</Text>
+              {isLoadingProfile ? (
+                <ActivityIndicator color={Colors.primary} size="small" />
+              ) : (
+                <Text style={styles.metricValue}>{eloRating}</Text>
+              )}
+            </View>
+
+            <View style={styles.metricBox}>
+              <Text style={styles.metricLabel}>Matches Played</Text>
+              {isLoadingProfile ? (
+                <ActivityIndicator color={Colors.primary} size="small" />
+              ) : (
+                <Text style={styles.metricValue}>{totalMatches}</Text>
+              )}
+            </View>
           </View>
         </View>
-
-        <View style={styles.profileBadgesRow}>
-          <View style={styles.statusPill}>
-            <View style={styles.statusDot} />
-            <Text style={styles.statusText}>Active</Text>
-          </View>
-
-          <View style={[styles.rankBadge, { borderColor: `${rankBadge.color}55` }]}>
-            <View style={[styles.rankDot, { backgroundColor: rankBadge.color }]} />
-            <Text style={styles.rankText}>{rankBadge.label}</Text>
-          </View>
-        </View>
-
-        <View style={styles.metricsRow}>
-          <View style={styles.metricBox}>
-            <Text style={styles.metricLabel}>Current ELO</Text>
-            <Text style={styles.metricValue}>{eloRating}</Text>
-          </View>
-
-          <View style={styles.metricBox}>
-            <Text style={styles.metricLabel}>Member Since</Text>
-            <Text style={styles.metricValue}>{user?.createdAt ? new Date(user.createdAt).getFullYear() : '2026'}</Text>
-          </View>
-        </View>
-      </View>
 
       <View style={styles.sectionCard}>
         <View style={styles.sectionHeader}>
@@ -319,26 +347,6 @@ const styles = StyleSheet.create({
     color: Colors.textDark,
     fontSize: 12,
     fontWeight: '600',
-  },
-  rankBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 999,
-    borderWidth: 1,
-    backgroundColor: '#FAFBFD',
-  },
-  rankDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  rankText: {
-    color: Colors.textDark,
-    fontSize: 12,
-    fontWeight: '700',
   },
   metricsRow: {
     flexDirection: 'row',
