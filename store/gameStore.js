@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { supabase } from '../services/supabase.js';
+import { calculateBothPlayerElo } from '../utils/elo.js';
 
 const GAME_PHASES = {
   IDLE: 'IDLE',
@@ -83,6 +84,11 @@ const initialState = {
   lastError: '',
   startedAt: null,
   endedAt: null,
+
+  // ELO rating state (populated after match conclusion)
+  playerNewElo: null,
+  playerEloChange: 0,
+  playerOutcome: null, // 1 = win, 0.5 = tie, 0 = loss
 
   deadlineTimerId: null,
 };
@@ -520,6 +526,259 @@ export const useGameStore = create((set, get) => ({
         ended_at: new Date().toISOString(),
       })
       .eq('id', state.battleId);
+  },
+
+  /**
+   * CAPSTONE DEFENSE: Database Finalization Logic
+   * 
+   * This action is the critical bridge between the real-time game FSM
+   * and permanent data storage. It enforces host authority to prevent
+   * race conditions and ensures atomic updates across multiple tables.
+   * 
+   * Flow:
+   * 1. Host-only gate check (prevent concurrent writes from non-hosts)
+   * 2. Fetch both players' current profiles from database
+   * 3. Calculate new ELO ratings using pure utility function
+   * 4. Update profiles for both players (Transaction 1)
+   * 5. Insert match history record (Transaction 2)
+   * 6. Update local store with finalized state
+   * 
+   * Error Handling: Failures log clearly for debugging and don't crash
+   * the game. The game state still transitions to GAME_OVER regardless.
+   */
+  finalizeMatchToDatabase: async () => {
+    const state = get();
+
+    // ========================================
+    // GATE 1: HOST AUTHORITY CHECK
+    // ========================================
+    // Only the host/creator writes to the database to avoid race conditions
+    // and duplicate entries. All other clients are read-only.
+    if (!state.isCreatorClient) {
+      console.log('[ELO] Non-creator client skipped database finalization (expected behavior)');
+      return;
+    }
+
+    if (!state.battleId || !state.currentUserId) {
+      console.error('[ELO] Cannot finalize: missing battleId or currentUserId');
+      return;
+    }
+
+    try {
+      // ========================================
+      // STEP 1: DETERMINE GAME OUTCOME
+      // ========================================
+      const scoresByUserId = state.scoresByUserId || {};
+      const playerScores = Object.entries(scoresByUserId);
+
+      if (playerScores.length < 2) {
+        console.warn('[ELO] Insufficient players for match history. Skipping finalization.');
+        return;
+      }
+
+      // Sort by score descending to determine winner
+      playerScores.sort(([, scoreA], [, scoreB]) => scoreB - scoreA);
+
+      const winnerId = playerScores[0][0]; // Highest score
+      const loserId = playerScores[1][0]; // Second highest
+      const winnerScore = playerScores[0][1];
+      const loserScore = playerScores[1][1];
+
+      // Determine outcome: 1 = host won, 0 = host lost, 0.5 = tie
+      let hostOutcome = 0;
+      if (winnerScore === loserScore) {
+        // Tie game
+        hostOutcome = 0.5;
+      } else if (winnerId === state.currentUserId) {
+        // Host won
+        hostOutcome = 1;
+      }
+      // If loserId === state.currentUserId, hostOutcome remains 0
+
+      // ========================================
+      // STEP 2: FETCH CURRENT PROFILES
+      // ========================================
+      // Get both players' current ELO ratings and stats from database
+      const { data: hostProfile, error: hostError } = await supabase
+        .from('profiles')
+        .select('id, elo_rating, total_matches, wins, losses')
+        .eq('id', state.currentUserId)
+        .maybeSingle();
+
+      if (hostError || !hostProfile) {
+        console.error('[ELO] Failed to fetch host profile:', hostError?.message);
+        set((prev) => ({
+          ...prev,
+          lastError: 'Failed to fetch player profile from database.',
+        }));
+        return;
+      }
+
+      const { data: opponentProfile, error: opponentError } = await supabase
+        .from('profiles')
+        .select('id, elo_rating, total_matches, wins, losses')
+        .eq('id', loserId === state.currentUserId ? winnerId : loserId)
+        .maybeSingle();
+
+      if (opponentError || !opponentProfile) {
+        console.error('[ELO] Failed to fetch opponent profile:', opponentError?.message);
+        set((prev) => ({
+          ...prev,
+          lastError: 'Failed to fetch opponent profile from database.',
+        }));
+        return;
+      }
+
+      // ========================================
+      // STEP 3: CALCULATE NEW ELO RATINGS
+      // ========================================
+      // Use the pure utility function to calculate both players' new ratings
+      const K_FACTOR = 32; // Standard competitive K-factor
+      const { newRating1: hostNewElo, newRating2: opponentNewElo } = calculateBothPlayerElo(
+        hostProfile.elo_rating,
+        opponentProfile.elo_rating,
+        hostOutcome,
+        K_FACTOR
+      );
+
+      const hostEloChange = hostNewElo - hostProfile.elo_rating;
+      const opponentEloChange = opponentNewElo - opponentProfile.elo_rating;
+
+      // ========================================
+      // STEP 4: DETERMINE WIN/LOSS FLAGS
+      // ========================================
+      let hostWins = hostProfile.wins;
+      let hostLosses = hostProfile.losses;
+      let opponentWins = opponentProfile.wins;
+      let opponentLosses = opponentProfile.losses;
+
+      if (hostOutcome === 1) {
+        // Host won
+        hostWins += 1;
+        opponentLosses += 1;
+      } else if (hostOutcome === 0) {
+        // Host lost
+        hostLosses += 1;
+        opponentWins += 1;
+      } else {
+        // Tie (0.5)
+        hostWins += 0.5;
+        hostLosses += 0.5;
+        opponentWins += 0.5;
+        opponentLosses += 0.5;
+      }
+
+      // ========================================
+      // TRANSACTION 1: UPDATE BOTH PLAYERS' PROFILES
+      // ========================================
+      console.log('[ELO] Updating profiles...', {
+        hostId: state.currentUserId,
+        hostNewElo,
+        opponentId: opponentProfile.id,
+        opponentNewElo,
+      });
+
+      // Update host profile
+      const { error: hostUpdateError } = await supabase
+        .from('profiles')
+        .update({
+          elo_rating: hostNewElo,
+          total_matches: hostProfile.total_matches + 1,
+          wins: hostWins,
+          losses: hostLosses,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', state.currentUserId);
+
+      if (hostUpdateError) {
+        console.error('[ELO] Failed to update host profile:', hostUpdateError.message);
+        set((prev) => ({
+          ...prev,
+          lastError: `Failed to save host rating: ${hostUpdateError.message}`,
+        }));
+        return;
+      }
+
+      // Update opponent profile
+      const { error: opponentUpdateError } = await supabase
+        .from('profiles')
+        .update({
+          elo_rating: opponentNewElo,
+          total_matches: opponentProfile.total_matches + 1,
+          wins: opponentWins,
+          losses: opponentLosses,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', opponentProfile.id);
+
+      if (opponentUpdateError) {
+        console.error('[ELO] Failed to update opponent profile:', opponentUpdateError.message);
+        set((prev) => ({
+          ...prev,
+          lastError: `Failed to save opponent rating: ${opponentUpdateError.message}`,
+        }));
+        return;
+      }
+
+      // ========================================
+      // TRANSACTION 2: INSERT MATCH HISTORY RECORD
+      // ========================================
+      console.log('[ELO] Inserting match history...', {
+        player1_id: state.currentUserId,
+        player2_id: opponentProfile.id,
+        winner_id: winnerId,
+        elo_change_p1: hostEloChange,
+        elo_change_p2: opponentEloChange,
+      });
+
+      const { error: historyError } = await supabase
+        .from('match_history')
+        .insert({
+          battle_id: state.battleId,
+          player_1_id: state.currentUserId,
+          player_2_id: opponentProfile.id,
+          winner_id: winnerId,
+          player_1_score: scoresByUserId[state.currentUserId] || 0,
+          player_2_score: scoresByUserId[opponentProfile.id] || 0,
+          elo_change_p1: hostEloChange,
+          elo_change_p2: opponentEloChange,
+          created_at: new Date().toISOString(),
+        });
+
+      if (historyError) {
+        console.error('[ELO] Failed to insert match history:', historyError.message);
+        set((prev) => ({
+          ...prev,
+          lastError: `Failed to save match history: ${historyError.message}`,
+        }));
+        return;
+      }
+
+      // ========================================
+      // STEP 5: UPDATE LOCAL STATE
+      // ========================================
+      // Store finalized ELO data for UI display
+      set((prev) => ({
+        ...prev,
+        playerNewElo: hostNewElo,
+        playerEloChange: hostEloChange,
+        playerOutcome: hostOutcome,
+        lastError: '', // Clear any previous errors
+      }));
+
+      console.log('[ELO] Match finalization complete!', {
+        hostNewElo,
+        hostEloChange,
+        opponentNewElo,
+        opponentEloChange,
+      });
+    } catch (err) {
+      console.error('[ELO] Unexpected error during finalization:', err);
+      set((prev) => ({
+        ...prev,
+        lastError: `Unexpected error: ${err.message || 'Unknown error'}`,
+      }));
+    }
   },
 
   teardownSession: async () => {
