@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth, useUser } from '@clerk/expo';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
-import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { supabase } from '../../services/supabase.js';
 import { BROADCAST_EVENTS, GAME_PHASES, useGameStore } from '../../store/gameStore.js';
 import { Colors } from '../../styles/tabs/history_styles.js';
@@ -310,7 +310,7 @@ export default function BattleArenaScreen() {
 
   if (isLoadingQuiz || !currentRound) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right', 'bottom']}>
         <View style={styles.loadingWrap}>
           <ActivityIndicator size="large" color={Colors.primary} />
           <Text style={styles.loadingText}>Preparing synchronized battle arena...</Text>
@@ -343,112 +343,116 @@ export default function BattleArenaScreen() {
           : '0';
 
     return (
-      <SafeAreaView style={styles.safeArea}>
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryTitle}>Battle Finished</Text>
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right', 'bottom']}>
+        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          <View style={styles.summaryCard}>
+            <Text style={styles.summaryTitle}>Battle Finished</Text>
 
-          {/* ELO RATING DISPLAY */}
-          {playerNewElo !== null && (
-            <View style={styles.eloResultsContainer}>
-              {/* Outcome Indicator */}
-              <View style={styles.outcomeRow}>
-                <Text style={[styles.outcomeText, { color: outcomeColor }]}>{outcomeText}</Text>
-              </View>
+            {/* ELO RATING DISPLAY */}
+            {playerNewElo !== null && (
+              <View style={styles.eloResultsContainer}>
+                {/* Outcome Indicator */}
+                <View style={styles.outcomeRow}>
+                  <Text style={[styles.outcomeText, { color: outcomeColor }]}>{outcomeText}</Text>
+                </View>
 
-              {/* ELO Rating Card */}
-              <View style={[styles.eloCard, { borderColor: outcomeColor }]}>
-                <View style={styles.eloRow}>
-                  <View style={styles.eloColumn}>
-                    <Text style={styles.eloLabel}>New Rating</Text>
-                    <Text style={styles.eloRating}>{playerNewElo}</Text>
-                  </View>
-                  <View style={styles.eloColumn}>
-                    <Text style={styles.eloLabel}>Change</Text>
-                    <Text style={[styles.eloChange, { color: playerEloChange > 0 ? '#4CAF50' : playerEloChange < 0 ? '#C24747' : Colors.darkGray }]}>
-                      {eloChangeDisplay}
-                    </Text>
+                {/* ELO Rating Card */}
+                <View style={[styles.eloCard, { borderColor: outcomeColor }]}>
+                  <View style={styles.eloRow}>
+                    <View style={styles.eloColumn}>
+                      <Text style={styles.eloLabel}>New Rating</Text>
+                      <Text style={styles.eloRating}>{playerNewElo}</Text>
+                    </View>
+                    <View style={styles.eloColumn}>
+                      <Text style={styles.eloLabel}>Change</Text>
+                      <Text style={[styles.eloChange, { color: playerEloChange > 0 ? '#4CAF50' : playerEloChange < 0 ? '#C24747' : Colors.darkGray }]}>
+                        {eloChangeDisplay}
+                      </Text>
+                    </View>
                   </View>
                 </View>
+
+                {/* Explanation */}
+                <Text style={styles.eloExplanation}>Your rating was calculated using the Elo formula and tournament results.</Text>
               </View>
+            )}
 
-              {/* Explanation */}
-              <Text style={styles.eloExplanation}>Your rating was calculated using the Elo formula and tournament results.</Text>
-            </View>
-          )}
+            <Text style={styles.summarySubtitle}>
+              All players received GAME_OVER at the same time. The room battle state has been reset.
+            </Text>
+            <Text style={styles.summaryMeta}>Room: {roomName || 'Study Room'}</Text>
+            <Text style={styles.summaryMeta}>Topic: {roomTopic || 'General Knowledge'}</Text>
 
-          <Text style={styles.summarySubtitle}>
-            All players received GAME_OVER at the same time. The room battle state has been reset.
-          </Text>
-          <Text style={styles.summaryMeta}>Room: {roomName || 'Study Room'}</Text>
-          <Text style={styles.summaryMeta}>Topic: {roomTopic || 'General Knowledge'}</Text>
-
-          <Pressable
-            onPress={localIsCreator ? handleCreateNewBattle : handleReturnToDashboard}
-            style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryButtonPressed]}
-          >
-            <Text style={styles.primaryButtonText}>{localIsCreator ? 'Create New Battle' : 'Return to Dashboard'}</Text>
-          </Pressable>
-        </View>
+            <Pressable
+              onPress={localIsCreator ? handleCreateNewBattle : handleReturnToDashboard}
+              style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryButtonPressed]}
+            >
+              <Text style={styles.primaryButtonText}>{localIsCreator ? 'Create New Battle' : 'Return to Dashboard'}</Text>
+            </Pressable>
+          </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.header}>
-        <Pressable onPress={handleBackToRoom} style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}>
-          <Ionicons name="chevron-back" size={20} color={Colors.textDark} />
-        </Pressable>
-        <Text style={styles.headerTitle}>Game Arena</Text>
-        <View style={styles.headerPlaceholder} />
-      </View>
-
-      <View style={styles.metricsRow}>
-        <View style={styles.metricCard}>
-          <Text style={styles.metricLabel}>Round</Text>
-          <Text style={styles.metricValue}>{Math.min(roundIndex + 1, rounds.length)}/{rounds.length}</Text>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right', 'bottom']}>
+      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <View style={styles.header}>
+          <Pressable onPress={handleBackToRoom} style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}>
+            <Ionicons name="chevron-back" size={20} color={Colors.textDark} />
+          </Pressable>
+          <Text style={styles.headerTitle}>Game Arena</Text>
+          <View style={styles.headerPlaceholder} />
         </View>
-        <View style={styles.metricCard}>
-          <Text style={styles.metricLabel}>Timer</Text>
-          <Text style={[styles.metricValue, remainingSeconds <= 5 && styles.metricValueDanger]}>{remainingSeconds}s</Text>
+
+        <View style={styles.metricsRow}>
+          <View style={styles.metricCard}>
+            <Text style={styles.metricLabel}>Round</Text>
+            <Text style={styles.metricValue}>{Math.min(roundIndex + 1, rounds.length)}/{rounds.length}</Text>
+          </View>
+          <View style={styles.metricCard}>
+            <Text style={styles.metricLabel}>Timer</Text>
+            <Text style={[styles.metricValue, remainingSeconds <= 5 && styles.metricValueDanger]}>{remainingSeconds}s</Text>
+          </View>
+          <View style={styles.metricCard}>
+            <Text style={styles.metricLabel}>Submitted</Text>
+            <Text style={styles.metricValue}>{submittedCount}/{activePlayerCount}</Text>
+          </View>
         </View>
-        <View style={styles.metricCard}>
-          <Text style={styles.metricLabel}>Submitted</Text>
-          <Text style={styles.metricValue}>{submittedCount}/{activePlayerCount}</Text>
+
+        <View style={styles.questionCard}>
+          <Text style={styles.questionTopic}>{roomTopic || 'General Knowledge'}</Text>
+          <Text style={styles.questionText}>{currentRound.prompt}</Text>
+
+          <View style={styles.optionsWrap}>
+            {currentRound.options.map((option, index) => (
+              <Pressable
+                key={`${currentRound.id}-${option}`}
+                onPress={() => handleAnswer(index)}
+                disabled={localHasSubmittedCurrentRound || phase !== GAME_PHASES.ROUND}
+                style={({ pressed }) => [
+                  styles.optionButton,
+                  selectedOptionIndex === index && styles.optionButtonSelected,
+                  localHasSubmittedCurrentRound && styles.optionButtonLocked,
+                  pressed && !localHasSubmittedCurrentRound && styles.optionButtonPressed,
+                ]}
+              >
+                <Text style={styles.optionText}>{option}</Text>
+              </Pressable>
+            ))}
+          </View>
         </View>
-      </View>
 
-      <View style={styles.questionCard}>
-        <Text style={styles.questionTopic}>{roomTopic || 'General Knowledge'}</Text>
-        <Text style={styles.questionText}>{currentRound.prompt}</Text>
-
-        <View style={styles.optionsWrap}>
-          {currentRound.options.map((option, index) => (
-            <Pressable
-              key={`${currentRound.id}-${option}`}
-              onPress={() => handleAnswer(index)}
-              disabled={localHasSubmittedCurrentRound || phase !== GAME_PHASES.ROUND}
-              style={({ pressed }) => [
-                styles.optionButton,
-                selectedOptionIndex === index && styles.optionButtonSelected,
-                localHasSubmittedCurrentRound && styles.optionButtonLocked,
-                pressed && !localHasSubmittedCurrentRound && styles.optionButtonPressed,
-              ]}
-            >
-              <Text style={styles.optionText}>{option}</Text>
-            </Pressable>
-          ))}
+        <View style={styles.footerNotice}>
+          <Ionicons name="sync-outline" size={16} color={Colors.darkGray} />
+          <Text style={styles.footerNoticeText}>
+            Next round advances when all players submit or when timer reaches zero.
+          </Text>
         </View>
-      </View>
 
-      <View style={styles.footerNotice}>
-        <Ionicons name="sync-outline" size={16} color={Colors.darkGray} />
-        <Text style={styles.footerNoticeText}>
-          Next round advances when all players submit or when timer reaches zero.
-        </Text>
-      </View>
-
-      {quizError ? <Text style={styles.quizErrorText}>{quizError}</Text> : null}
+        {quizError ? <Text style={styles.quizErrorText}>{quizError}</Text> : null}
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -457,6 +461,12 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#F4F7FB',
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 16,
   },
   loadingWrap: {
     flex: 1,
@@ -505,6 +515,7 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingHorizontal: 12,
     paddingTop: 12,
+    paddingBottom: 8,
   },
   metricCard: {
     flex: 1,
@@ -539,7 +550,8 @@ const styles = StyleSheet.create({
   },
   questionCard: {
     margin: 12,
-    marginTop: 14,
+    marginTop: 8,
+    marginBottom: 12,
     borderRadius: 20,
     borderWidth: 1,
     borderColor: 'rgba(26,26,26,0.04)',
@@ -589,6 +601,7 @@ const styles = StyleSheet.create({
   },
   footerNotice: {
     marginHorizontal: 12,
+    marginBottom: 12,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: 'rgba(26,26,26,0.04)',
@@ -615,7 +628,8 @@ const styles = StyleSheet.create({
   },
   summaryCard: {
     margin: 14,
-    marginTop: 26,
+    marginTop: 20,
+    marginBottom: 16,
     borderRadius: 20,
     borderWidth: 1,
     borderColor: 'rgba(26,26,26,0.04)',
