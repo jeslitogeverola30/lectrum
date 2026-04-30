@@ -810,6 +810,12 @@ export const useGameStore = create((set, get) => ({
       }
 
       try {
+        await state.channel.unsubscribe();
+      } catch (_) {
+        // Ignore unsubscribe errors.
+      }
+
+      try {
         await supabase.removeChannel(state.channel);
       } catch (_) {
         // Ignore channel removal errors during teardown.

@@ -280,8 +280,10 @@ export default function RoomChatScreen() {
     let isActive = true;
 
     const connectBattleChannel = async () => {
+      // Properly clean up the old channel
       if (battleChannelRef.current) {
         try {
+          await battleChannelRef.current.unsubscribe();
           await supabase.removeChannel(battleChannelRef.current);
         } catch (_) {
           // Ignore stale channel cleanup errors and continue with a fresh subscription.
@@ -316,6 +318,7 @@ export default function RoomChatScreen() {
 
       if (!isActive) {
         try {
+          await battleChannel.unsubscribe();
           await supabase.removeChannel(battleChannel);
         } catch (_) {
           // Ignore late cleanup errors.
@@ -334,7 +337,12 @@ export default function RoomChatScreen() {
       battleChannelRef.current = null;
 
       if (currentBattleChannel) {
-        supabase.removeChannel(currentBattleChannel);
+        try {
+          currentBattleChannel.unsubscribe();
+          supabase.removeChannel(currentBattleChannel);
+        } catch (_) {
+          // Ignore cleanup errors
+        }
       }
     };
   }, [roomId]);
