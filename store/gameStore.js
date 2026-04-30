@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { Alert } from 'react-native';
 import { supabase } from '../services/supabase.js';
 import { calculateBothPlayerElo } from '../utils/elo.js';
 
@@ -14,6 +15,7 @@ const BROADCAST_EVENTS = {
   PLAYER_ANSWERED: 'PLAYER_ANSWERED',
   NEXT_ROUND: 'NEXT_ROUND',
   GAME_OVER: 'GAME_OVER',
+  ROOM_CLOSED: 'ROOM_CLOSED',
 };
 
 const clampPositiveInt = (value, fallback) => {
@@ -166,6 +168,15 @@ export const useGameStore = create((set, get) => ({
 
     channel.on('broadcast', { event: BROADCAST_EVENTS.GAME_OVER }, ({ payload }) => {
       get().handleGameOverBroadcast(payload || {});
+    });
+
+    channel.on('broadcast', { event: BROADCAST_EVENTS.ROOM_CLOSED }, ({ payload }) => {
+      const senderId = payload?.senderId || null;
+      if (senderId && senderId === get().currentUserId) {
+        return;
+      }
+
+      get().handleRoomClosedBroadcast();
     });
 
     set((prev) => ({ ...prev, channel, connectionStatus: 'connecting', lastError: '' }));
@@ -488,6 +499,11 @@ export const useGameStore = create((set, get) => ({
     }));
   },
 
+  handleRoomClosedBroadcast: async () => {
+    await get().teardownAndReset();
+    Alert.alert('Room Closed', 'The host has closed the room.');
+  },
+
   armCreatorDeadlineTimer: () => {
     const state = get();
     get().clearDeadlineTimer();
@@ -781,7 +797,7 @@ export const useGameStore = create((set, get) => ({
     }
   },
 
-  teardownSession: async () => {
+  teardownAndReset: async () => {
     const state = get();
 
     get().clearDeadlineTimer();
@@ -793,10 +809,18 @@ export const useGameStore = create((set, get) => ({
         // Ignore cleanup track errors.
       }
 
-      await supabase.removeChannel(state.channel);
+      try {
+        await supabase.removeChannel(state.channel);
+      } catch (_) {
+        // Ignore channel removal errors during teardown.
+      }
     }
 
     set({ ...initialState });
+  },
+
+  teardownSession: async () => {
+    await get().teardownAndReset();
   },
 
   getRemainingSeconds: () => {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth, useUser } from '@clerk/expo';
 import * as DocumentPicker from 'expo-document-picker';
@@ -91,6 +91,7 @@ export default function RoomChatScreen() {
   const [isLoadingRoom, setIsLoadingRoom] = useState(true);
   const [roomError, setRoomError] = useState('');
   const [currentRoomAvatar, setCurrentRoomAvatar] = useState(roomAvatar || '🎓');
+  const battleChannelRef = useRef(null);
   const isRoomAvatarImage =
     typeof currentRoomAvatar === 'string' &&
     (currentRoomAvatar.startsWith('file://') ||
@@ -109,8 +110,10 @@ export default function RoomChatScreen() {
   const battleRealtimeError = useGameStore((state) => state.lastError);
   const hydrateBattleSession = useGameStore((state) => state.hydrateBattleSession);
   const joinLobby = useGameStore((state) => state.joinLobby);
+  const leaveLobby = useGameStore((state) => state.leaveLobby);
   const setLocalReady = useGameStore((state) => state.setLocalReady);
   const startBattle = useGameStore((state) => state.startBattle);
+  const teardownSession = useGameStore((state) => state.teardownSession);
   const getLobbyMembers = useGameStore((state) => state.getLobbyMembers);
   const getAllActivePlayers = useGameStore((state) => state.getAllActivePlayers);
   const canCreatorStartBattle = useGameStore((state) => state.canCreatorStartBattle);
@@ -274,29 +277,65 @@ export default function RoomChatScreen() {
       return undefined;
     }
 
-    const battleChannel = supabase
-      .channel(`room-battles-${roomId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'battles', filter: `room_id=eq.${roomId}` },
-        async () => {
-          const { data, error } = await supabase
-            .from('battles')
-            .select('id, creator_id, quiz_id, round_count, time_per_item, status, created_at')
-            .eq('room_id', roomId)
-            .in('status', ['pending', 'active'])
-            .order('created_at', { ascending: false })
-            .limit(1);
+    let isActive = true;
 
-          if (!error) {
-            setActiveBattle((data ?? [])[0] ?? null);
-          }
+    const connectBattleChannel = async () => {
+      if (battleChannelRef.current) {
+        try {
+          await supabase.removeChannel(battleChannelRef.current);
+        } catch (_) {
+          // Ignore stale channel cleanup errors and continue with a fresh subscription.
         }
-      )
-      .subscribe();
+        battleChannelRef.current = null;
+      }
+
+      if (!isActive) {
+        return;
+      }
+
+      const battleChannel = supabase
+        .channel(`room-battles-${roomId}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'battles', filter: `room_id=eq.${roomId}` },
+          async () => {
+            const { data, error } = await supabase
+              .from('battles')
+              .select('id, creator_id, quiz_id, round_count, time_per_item, status, created_at')
+              .eq('room_id', roomId)
+              .in('status', ['pending', 'active'])
+              .order('created_at', { ascending: false })
+              .limit(1);
+
+            if (!error) {
+              setActiveBattle((data ?? [])[0] ?? null);
+            }
+          }
+        )
+        .subscribe();
+
+      if (!isActive) {
+        try {
+          await supabase.removeChannel(battleChannel);
+        } catch (_) {
+          // Ignore late cleanup errors.
+        }
+        return;
+      }
+
+      battleChannelRef.current = battleChannel;
+    };
+
+    connectBattleChannel();
 
     return () => {
-      supabase.removeChannel(battleChannel);
+      isActive = false;
+      const currentBattleChannel = battleChannelRef.current;
+      battleChannelRef.current = null;
+
+      if (currentBattleChannel) {
+        supabase.removeChannel(currentBattleChannel);
+      }
     };
   }, [roomId]);
 
@@ -604,6 +643,69 @@ export default function RoomChatScreen() {
     ]);
   };
 
+  const handleLeaveRoom = () => {
+    if (!user?.id) {
+      return;
+    }
+
+    Alert.alert('Leave room', 'Are you sure you want to leave this room?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Leave',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            // First update realtime presence / lobby state
+            try {
+              await leaveLobby();
+            } catch (err) {
+              // Non-fatal: continue to remove membership and navigate away
+              console.warn('leaveLobby failed:', err?.message || err);
+            }
+
+            // Remove membership record from DB
+            const { error } = await supabase
+              .from('room_members')
+              .delete()
+              .match({ room_id: roomId, user_id: user.id });
+
+            if (error) {
+              console.error('Failed to remove room member:', error.message);
+              Alert.alert('Could not leave room', 'There was a problem removing you from the room.');
+              return;
+            }
+
+            // Update local members list for immediate UI feedback
+            setRoomMembers((prev) => prev.filter((m) => m.userId !== user.id));
+
+            // Teardown any realtime session resources and navigate back to room list
+            try {
+              await teardownSession();
+            } catch (err) {
+              console.warn('teardownSession failed:', err?.message || err);
+            }
+
+            if (battleChannelRef.current) {
+              try {
+                await supabase.removeChannel(battleChannelRef.current);
+              } catch (err) {
+                console.warn('battle channel cleanup failed:', err?.message || err);
+              } finally {
+                battleChannelRef.current = null;
+              }
+            }
+
+            setShowConversationInfo(false);
+            router.push('/');
+          } catch (err) {
+            console.error('Unexpected error leaving room:', err);
+            Alert.alert('Leave failed', err?.message || 'Unable to leave room right now.');
+          }
+        },
+      },
+    ]);
+  };
+
   const handleChangeRoomPhoto = async () => {
     if (!isCreator) {
       Alert.alert('Permission denied', 'Only the room creator can change the room photo.');
@@ -826,6 +928,19 @@ export default function RoomChatScreen() {
                   </View>
                 );
               })}
+            </View>
+
+            {/* Leave Room action - visible to all members */}
+            <View style={{ marginTop: 14 }}>
+              <Pressable
+                onPress={handleLeaveRoom}
+                style={({ pressed }) => [
+                  styles.leaveButton,
+                  pressed && styles.leaveButtonPressed,
+                ]}
+              >
+                <Text style={styles.leaveButtonText}>Leave Room</Text>
+              </Pressable>
             </View>
           </View>
         </Pressable>
@@ -1701,6 +1816,21 @@ const styles = StyleSheet.create({
   },
   enterArenaText: {
     color: Colors.white,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  leaveButton: {
+    height: 46,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F44E4E',
+  },
+  leaveButtonPressed: {
+    opacity: 0.85,
+  },
+  leaveButtonText: {
+    color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '700',
   },

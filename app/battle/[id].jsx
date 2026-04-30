@@ -4,7 +4,7 @@ import { useAuth, useUser } from '@clerk/expo';
 import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { supabase } from '../../services/supabase.js';
-import { GAME_PHASES, useGameStore } from '../../store/gameStore.js';
+import { BROADCAST_EVENTS, GAME_PHASES, useGameStore } from '../../store/gameStore.js';
 import { Colors } from '../../styles/auth/auth_styles.js';
 
 const FALLBACK_QUESTION_BANK = [
@@ -99,6 +99,8 @@ export default function BattleArenaScreen() {
   const roundIndex = useGameStore((state) => state.roundIndex);
   const localIsCreator = useGameStore((state) => state.isCreatorClient);
   const localHasSubmittedCurrentRound = useGameStore((state) => state.hasLocalSubmittedCurrentRound());
+  const currentUserId = useGameStore((state) => state.currentUserId);
+  const channel = useGameStore((state) => state.channel);
   const hydrateBattleSession = useGameStore((state) => state.hydrateBattleSession);
   const submitAnswer = useGameStore((state) => state.submitAnswer);
   const getRemainingSeconds = useGameStore((state) => state.getRemainingSeconds);
@@ -109,6 +111,7 @@ export default function BattleArenaScreen() {
   const playerNewElo = useGameStore((state) => state.playerNewElo);
   const playerEloChange = useGameStore((state) => state.playerEloChange);
   const playerOutcome = useGameStore((state) => state.playerOutcome);
+  const teardownAndReset = useGameStore((state) => state.teardownAndReset);
   const teardownSession = useGameStore((state) => state.teardownSession);
 
   const hasMarkedCompleted = useRef(false);
@@ -275,6 +278,28 @@ export default function BattleArenaScreen() {
     router.back();
   };
 
+  const handleCreateNewBattle = async () => {
+    if (channel && currentUserId) {
+      await channel.send({
+        type: 'broadcast',
+        event: BROADCAST_EVENTS.ROOM_CLOSED,
+        payload: {
+          battleId,
+          senderId: currentUserId,
+          closedAt: Date.now(),
+        },
+      });
+    }
+
+    await teardownAndReset();
+    router.push('/create-quiz');
+  };
+
+  const handleReturnToDashboard = async () => {
+    await teardownAndReset();
+    router.replace('/(tabs)');
+  };
+
   if (!isLoaded) {
     return null;
   }
@@ -358,10 +383,10 @@ export default function BattleArenaScreen() {
           <Text style={styles.summaryMeta}>Topic: {roomTopic || 'General Knowledge'}</Text>
 
           <Pressable
-            onPress={handleBackToRoom}
+            onPress={localIsCreator ? handleCreateNewBattle : handleReturnToDashboard}
             style={({ pressed }) => [styles.primaryButton, pressed && styles.primaryButtonPressed]}
           >
-            <Text style={styles.primaryButtonText}>Back To Room</Text>
+            <Text style={styles.primaryButtonText}>{localIsCreator ? 'Create New Battle' : 'Return to Dashboard'}</Text>
           </Pressable>
         </View>
       </SafeAreaView>
