@@ -397,15 +397,14 @@ export default function BattleArenaScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right', 'bottom']}>
+      <View style={styles.header}>
+        <Pressable onPress={handleBackToRoom} style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}>
+          <Ionicons name="chevron-back" size={20} color={Colors.textDark} />
+        </Pressable>
+        <Text style={styles.headerTitle}>Game Arena</Text>
+        <View style={styles.headerPlaceholder} />
+      </View>
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        <View style={styles.header}>
-          <Pressable onPress={handleBackToRoom} style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}>
-            <Ionicons name="chevron-back" size={20} color={Colors.textDark} />
-          </Pressable>
-          <Text style={styles.headerTitle}>Game Arena</Text>
-          <View style={styles.headerPlaceholder} />
-        </View>
-
         <View style={styles.metricsRow}>
           <View style={styles.metricCard}>
             <Text style={styles.metricLabel}>Round</Text>
@@ -462,6 +461,16 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F4F7FB',
   },
+  header: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(26,26,26,0.04)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F4F7FB',
+  },
   scrollView: {
     flex: 1,
   },
@@ -478,15 +487,6 @@ const styles = StyleSheet.create({
     color: Colors.darkGray,
     fontSize: 13,
     fontWeight: '600',
-  },
-  header: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(26,26,26,0.04)',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
   },
   backButton: {
     width: 34,
