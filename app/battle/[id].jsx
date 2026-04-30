@@ -5,7 +5,7 @@ import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import { ActivityIndicator, Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { supabase } from '../../services/supabase.js';
 import { BROADCAST_EVENTS, GAME_PHASES, useGameStore } from '../../store/gameStore.js';
-import { Colors } from '../../styles/auth/auth_styles.js';
+import { Colors } from '../../styles/tabs/history_styles.js';
 
 const FALLBACK_QUESTION_BANK = [
   {
@@ -470,8 +470,8 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   header: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(26,26,26,0.04)',
     flexDirection: 'row',
@@ -484,7 +484,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: Colors.white || '#FFFFFF',
     borderWidth: 1,
     borderColor: 'rgba(26,26,26,0.06)',
   },
@@ -493,8 +493,8 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     color: Colors.textDark,
-    fontSize: 18,
-    fontWeight: '800',
+    fontSize: 28,
+    fontWeight: '900',
   },
   headerPlaceholder: {
     width: 34,
@@ -502,28 +502,35 @@ const styles = StyleSheet.create({
   },
   metricsRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 10,
     paddingHorizontal: 12,
     paddingTop: 12,
   },
   metricCard: {
     flex: 1,
-    borderRadius: 12,
+    backgroundColor: Colors.white,
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
     borderWidth: 1,
-    borderColor: 'rgba(26,26,26,0.06)',
-    backgroundColor: '#FFFFFF',
+    borderColor: 'rgba(26,26,26,0.04)',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 10,
+    gap: 5,
+    shadowColor: '#000',
+    shadowOpacity: 0.02,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
   },
   metricLabel: {
     color: Colors.darkGray,
     fontSize: 11,
     fontWeight: '600',
+    textAlign: 'center',
   },
   metricValue: {
     color: Colors.textDark,
-    fontSize: 15,
+    fontSize: 20,
     fontWeight: '800',
     marginTop: 2,
   },
@@ -533,10 +540,10 @@ const styles = StyleSheet.create({
   questionCard: {
     margin: 12,
     marginTop: 14,
-    borderRadius: 16,
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: 'rgba(26,26,26,0.06)',
-    backgroundColor: '#FFFFFF',
+    borderColor: 'rgba(26,26,26,0.04)',
+    backgroundColor: Colors.white,
     paddingHorizontal: 14,
     paddingVertical: 14,
     gap: 10,
@@ -560,8 +567,8 @@ const styles = StyleSheet.create({
   optionButton: {
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(26,26,26,0.08)',
-    backgroundColor: '#F8FAFC',
+    borderColor: 'rgba(26,26,26,0.04)',
+    backgroundColor: '#FAFBFD',
     paddingHorizontal: 12,
     paddingVertical: 12,
   },
@@ -582,10 +589,10 @@ const styles = StyleSheet.create({
   },
   footerNotice: {
     marginHorizontal: 12,
-    borderRadius: 10,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(26,26,26,0.08)',
-    backgroundColor: '#F8FAFC',
+    borderColor: 'rgba(26,26,26,0.04)',
+    backgroundColor: '#FAFBFD',
     paddingHorizontal: 12,
     paddingVertical: 10,
     flexDirection: 'row',
@@ -609,12 +616,17 @@ const styles = StyleSheet.create({
   summaryCard: {
     margin: 14,
     marginTop: 26,
-    borderRadius: 16,
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: 'rgba(26,26,26,0.06)',
-    backgroundColor: '#FFFFFF',
-    padding: 16,
+    borderColor: 'rgba(26,26,26,0.04)',
+    backgroundColor: Colors.white,
+    padding: 14,
     gap: 8,
+    shadowColor: '#000',
+    shadowOpacity: 0.02,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
   },
   summaryTitle: {
     color: Colors.textDark,
@@ -634,7 +646,7 @@ const styles = StyleSheet.create({
   eloResultsContainer: {
     borderTopWidth: 1,
     borderBottomWidth: 1,
-    borderColor: 'rgba(26,26,26,0.06)',
+    borderColor: 'rgba(26,26,26,0.04)',
     paddingVertical: 12,
     marginVertical: 10,
     gap: 8,
@@ -691,7 +703,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: Colors.textDark,
+    backgroundColor: Colors.primary,
   },
   primaryButtonPressed: {
     opacity: 0.85,
